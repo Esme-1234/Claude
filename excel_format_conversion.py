@@ -7,9 +7,22 @@ Usage:
 """
 
 import argparse
+import datetime
 import sys
 
 import pandas as pd
+
+
+def _is_date_header(value) -> bool:
+    if isinstance(value, (pd.Timestamp, datetime.date, datetime.datetime)):
+        return True
+    if isinstance(value, str):
+        try:
+            pd.to_datetime(value)
+            return True
+        except (ValueError, TypeError):
+            return False
+    return False
 
 
 def convert(input_path: str, sheet_name=0, upload_type: str = "ADD") -> pd.DataFrame:
@@ -25,9 +38,33 @@ def convert(input_path: str, sheet_name=0, upload_type: str = "ADD") -> pd.DataF
             f"Columns found: {list(raw.columns)}"
         )
 
-    date_cols = [col for col in raw.columns if col != category_col]
+    # Only take the contiguous run of real date-typed headers right after
+    # Category. Sheets can have unrelated trailing columns (totals, a second
+    # "actuals" block, etc.) whose headers are not genuine date values, or
+    # are duplicate dates pandas has renamed to strings (e.g. "...0.1") -
+    # both are excluded by requiring an actual date/datetime type.
+    cols = list(raw.columns)
+    start = cols.index(category_col) + 1
+    date_cols = []
+    for col in cols[start:]:
+        if not _is_date_header(col):
+            break
+        date_cols.append(col)
     if not date_cols:
-        raise ValueError("No date columns found after the 'Category' column.")
+        raise ValueError("No date columns found immediately after the 'Category' column.")
+
+    # Restrict to the contiguous block of real category rows starting right
+    # below the header. Sheets often have unrelated notes/totals further
+    # down that happen to reuse the same columns - stop at the first row
+    # whose Category value isn't a fresh, non-empty category name.
+    seen = set()
+    end = len(raw)
+    for i, value in enumerate(raw[category_col]):
+        if not isinstance(value, str) or not value.strip() or value in seen:
+            end = i
+            break
+        seen.add(value)
+    raw = raw.iloc[:end]
 
     long_df = raw.melt(
         id_vars=[category_col],
