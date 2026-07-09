@@ -8,10 +8,8 @@ Build a shortage report from three planning Excel files:
    with one column per plan week (header is the week number, e.g. 202628).
    The first such week column gives the required quantity for a partNumber.
 3. PlanningResult.xlsx - Sheet1 has one row per planned lot (partNumber,
-   planDate, quantity). For each partNumber we only count the lots from its
-   most recent planDate (a part typically has several re-plan snapshots;
-   only the latest one is still relevant) - that sum is the matched quantity
-   already covered by planning.
+   planDate, quantity). matchedQty is the sum of quantity over every row
+   whose partNumber matches - the total already covered by planning.
 
 For every target partNumber: gap = matchedQty - requiredQty. A negative gap
 means planning hasn't covered the requirement yet (a shortage). The output
@@ -83,18 +81,12 @@ def get_matched_quantities(planning_result_path, sheet_name=None):
     header_row, header = _find_header_row(ws, "partNumber", max_scan_rows=1)
     pn_idx = header.index("partNumber")
     qty_idx = header.index("quantity")
-    date_idx = header.index("planDate")
 
-    rows_by_pn = defaultdict(list)
+    matched = defaultdict(float)
     for row in ws.iter_rows(min_row=header_row + 1, values_only=True):
         pn = row[pn_idx]
         if pn:
-            rows_by_pn[pn].append((row[date_idx], row[qty_idx] or 0))
-
-    matched = {}
-    for pn, entries in rows_by_pn.items():
-        max_date = max(d for d, _ in entries if d is not None)
-        matched[pn] = sum(q for d, q in entries if d == max_date)
+            matched[pn] += row[qty_idx] or 0
     return matched
 
 
