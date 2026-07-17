@@ -9,8 +9,15 @@ are added, or 0 to disable.
 
 Rows with a blank or zero Quantity are dropped from the output.
 
+If --reference is given, it points to a two-column (Category, quantity)
+sheet holding the already-known quantities for the earliest date in the
+output. For that earliest date's rows only: if the reference quantity
+differs from the computed Quantity and the reference quantity is not 0,
+UploadType is changed from ADD to UPDATE for that row (categories missing
+from the reference, or where the reference is 0, are left as ADD).
+
 Usage:
-    python excel_format_conversion.py <input.xlsx> <output.xlsx> [--sheet SHEET_NAME] [--upload-type ADD] [--extend-days 1]
+    python excel_format_conversion.py <input.xlsx> <output.xlsx> [--sheet SHEET_NAME] [--upload-type ADD] [--extend-days 1] [--reference reference.xlsx]
 """
 
 import argparse
@@ -100,6 +107,32 @@ def convert(input_path: str, sheet_name=0, upload_type: str = "ADD", extend_days
     return long_df
 
 
+def apply_update_flag(long_df: pd.DataFrame, reference_path: str) -> pd.DataFrame:
+    ref = pd.read_excel(reference_path, sheet_name=0)
+    category_col, value_col = ref.columns[0], ref.columns[1]
+    reference = dict(zip(ref[category_col], ref[value_col]))
+
+    earliest_date = long_df["PlanDate"].min()
+    is_earliest = long_df["PlanDate"] == earliest_date
+
+    def decide(upload_type, category, quantity, is_earliest_row):
+        if not is_earliest_row:
+            return upload_type
+        ref_qty = reference.get(category)
+        if ref_qty is not None and ref_qty != 0 and ref_qty != quantity:
+            return "UPDATE"
+        return upload_type
+
+    long_df = long_df.copy()
+    long_df["UploadType"] = [
+        decide(ut, cat, qty, earliest)
+        for ut, cat, qty, earliest in zip(
+            long_df["UploadType"], long_df["Category"], long_df["Quantity"], is_earliest
+        )
+    ]
+    return long_df
+
+
 def save(df: pd.DataFrame, output_path: str) -> None:
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Sheet1")
@@ -125,6 +158,12 @@ def main():
         help="Number of extra trailing dates to add after the last date column, "
         "each carrying forward the last date's quantity (default: 1, use 0 to disable)",
     )
+    parser.add_argument(
+        "--reference",
+        default=None,
+        help="Path to a (Category, quantity) sheet for the earliest date; rows whose "
+        "quantity differs from a non-zero reference value get UploadType=UPDATE",
+    )
     args = parser.parse_args()
 
     sheet = args.sheet
@@ -134,6 +173,8 @@ def main():
         pass
 
     df = convert(args.input, sheet_name=sheet, upload_type=args.upload_type, extend_days=args.extend_days)
+    if args.reference:
+        df = apply_update_flag(df, args.reference)
     save(df, args.output)
     print(f"Converted {len(df)} rows -> {args.output}")
 
