@@ -7,6 +7,8 @@ forward the last date column's quantity (e.g. last date 7/3 with qty 80 ->
 also emit 7/4 with qty 80). Use --extend-days to change how many extra days
 are added, or 0 to disable.
 
+Rows with a blank or zero Quantity are dropped from the output.
+
 Usage:
     python excel_format_conversion.py <input.xlsx> <output.xlsx> [--sheet SHEET_NAME] [--upload-type ADD] [--extend-days 1]
 """
@@ -94,6 +96,7 @@ def convert(input_path: str, sheet_name=0, upload_type: str = "ADD", extend_days
     long_df.insert(0, "UploadType", upload_type)
 
     long_df = long_df[["UploadType", "Category", "PlanDate", "Quantity"]]
+    long_df = long_df[long_df["Quantity"].notna() & (long_df["Quantity"] != 0)]
     return long_df
 
 
