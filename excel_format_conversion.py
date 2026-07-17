@@ -2,8 +2,13 @@
 Convert a "wide" Excel sheet (one column per PlanDate, one row per Category)
 into a "long" Excel sheet with columns: UploadType, Category, PlanDate, Quantity.
 
+By default the date range is extended by one extra trailing day, carrying
+forward the last date column's quantity (e.g. last date 7/3 with qty 80 ->
+also emit 7/4 with qty 80). Use --extend-days to change how many extra days
+are added, or 0 to disable.
+
 Usage:
-    python excel_format_conversion.py <input.xlsx> <output.xlsx> [--sheet SHEET_NAME] [--upload-type ADD]
+    python excel_format_conversion.py <input.xlsx> <output.xlsx> [--sheet SHEET_NAME] [--upload-type ADD] [--extend-days 1]
 """
 
 import argparse
@@ -25,7 +30,7 @@ def _is_date_header(value) -> bool:
     return False
 
 
-def convert(input_path: str, sheet_name=0, upload_type: str = "ADD") -> pd.DataFrame:
+def convert(input_path: str, sheet_name=0, upload_type: str = "ADD", extend_days: int = 1) -> pd.DataFrame:
     raw = pd.read_excel(input_path, sheet_name=sheet_name)
 
     category_col = next(
@@ -66,9 +71,21 @@ def convert(input_path: str, sheet_name=0, upload_type: str = "ADD") -> pd.DataF
         seen.add(value)
     raw = raw.iloc[:end]
 
+    # Extend the date range by carrying the last date column's values forward
+    # onto extra_days new trailing dates (e.g. last date 7/3 -> also emit
+    # 7/4 with the same quantity as 7/3), before melting to long format.
+    last_date_col = date_cols[-1]
+    last_date = pd.to_datetime(last_date_col)
+    extra_cols = []
+    for i in range(1, extend_days + 1):
+        new_date_col = last_date + pd.Timedelta(days=i)
+        raw[new_date_col] = raw[last_date_col]
+        extra_cols.append(new_date_col)
+    all_date_cols = date_cols + extra_cols
+
     long_df = raw.melt(
         id_vars=[category_col],
-        value_vars=date_cols,
+        value_vars=all_date_cols,
         var_name="PlanDate",
         value_name="Quantity",
     )
@@ -98,6 +115,13 @@ def main():
     parser.add_argument("output", help="Path to write the converted .xlsx file (long format)")
     parser.add_argument("--sheet", default=0, help="Sheet name or index to read (default: first sheet)")
     parser.add_argument("--upload-type", default="ADD", help="Value to fill the UploadType column (default: ADD)")
+    parser.add_argument(
+        "--extend-days",
+        type=int,
+        default=1,
+        help="Number of extra trailing dates to add after the last date column, "
+        "each carrying forward the last date's quantity (default: 1, use 0 to disable)",
+    )
     args = parser.parse_args()
 
     sheet = args.sheet
@@ -106,7 +130,7 @@ def main():
     except (TypeError, ValueError):
         pass
 
-    df = convert(args.input, sheet_name=sheet, upload_type=args.upload_type)
+    df = convert(args.input, sheet_name=sheet, upload_type=args.upload_type, extend_days=args.extend_days)
     save(df, args.output)
     print(f"Converted {len(df)} rows -> {args.output}")
 
