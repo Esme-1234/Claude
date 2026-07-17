@@ -15,6 +15,9 @@ output. For that earliest date's rows only: if the reference quantity
 differs from the computed Quantity and the reference quantity is not 0,
 UploadType is changed from ADD to UPDATE for that row (categories missing
 from the reference, or where the reference is 0, are left as ADD).
+Conversely, any reference Category that isn't present at all among the
+earliest date's output rows gets a new row appended with UploadType=DELETE
+and Quantity set to that reference quantity.
 
 Usage:
     python excel_format_conversion.py <input.xlsx> <output.xlsx> [--sheet SHEET_NAME] [--upload-type ADD] [--extend-days 1] [--reference reference.xlsx]
@@ -130,6 +133,22 @@ def apply_update_flag(long_df: pd.DataFrame, reference_path: str) -> pd.DataFram
             long_df["UploadType"], long_df["Category"], long_df["Quantity"], is_earliest
         )
     ]
+
+    # Reference categories absent from the earliest date's output rows are
+    # no longer part of the plan - flag them for deletion.
+    existing_categories = set(long_df.loc[is_earliest, "Category"])
+    missing = [cat for cat in reference if cat not in existing_categories]
+    if missing:
+        delete_rows = pd.DataFrame(
+            {
+                "UploadType": "DELETE",
+                "Category": missing,
+                "PlanDate": earliest_date,
+                "Quantity": [reference[cat] for cat in missing],
+            }
+        )
+        long_df = pd.concat([long_df, delete_rows], ignore_index=True)
+
     return long_df
 
 
