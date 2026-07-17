@@ -135,7 +135,8 @@ def apply_update_flag(long_df: pd.DataFrame, reference_path: str) -> pd.DataFram
     ]
 
     # Reference categories absent from the earliest date's output rows are
-    # no longer part of the plan - flag them for deletion.
+    # no longer part of the plan - flag them for deletion, inserted right
+    # after the earliest date's other rows rather than at the very end.
     existing_categories = set(long_df.loc[is_earliest, "Category"])
     missing = [cat for cat in reference if cat not in existing_categories]
     if missing:
@@ -147,7 +148,9 @@ def apply_update_flag(long_df: pd.DataFrame, reference_path: str) -> pd.DataFram
                 "Quantity": [reference[cat] for cat in missing],
             }
         )
-        long_df = pd.concat([long_df, delete_rows], ignore_index=True)
+        long_df = pd.concat(
+            [long_df[is_earliest], delete_rows, long_df[~is_earliest]], ignore_index=True
+        )
 
     return long_df
 
