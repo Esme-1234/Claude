@@ -11,10 +11,13 @@ Rows with a blank or zero Quantity are dropped from the output.
 
 If --reference is given, it points to a two-column (Category, quantity)
 sheet holding the already-known quantities for the earliest date in the
-output. For that earliest date's rows only: if the reference quantity
-differs from the computed Quantity and the reference quantity is not 0,
-UploadType is changed from ADD to UPDATE for that row (categories missing
-from the reference, or where the reference is 0, are left as ADD).
+output. For that earliest date's rows only:
+  - if the reference quantity equals the computed Quantity, the row is
+    dropped entirely (already correct, nothing to upload)
+  - if the reference quantity differs and is not 0, UploadType is changed
+    from ADD to UPDATE
+  - if the reference quantity differs and is 0, or the category isn't in
+    the reference at all, the row is left as ADD
 Conversely, any reference Category that isn't present at all among the
 earliest date's output rows gets a new row appended with UploadType=DELETE
 and Quantity set to that reference quantity.
@@ -122,8 +125,12 @@ def apply_update_flag(long_df: pd.DataFrame, reference_path: str) -> pd.DataFram
         if not is_earliest_row:
             return upload_type
         ref_qty = reference.get(category)
-        if ref_qty is not None and ref_qty != 0 and ref_qty != quantity:
-            return "UPDATE"
+        if ref_qty is not None:
+            if ref_qty == quantity:
+                # Already matches what's on record - nothing to upload.
+                return "_DROP_"
+            if ref_qty != 0:
+                return "UPDATE"
         return upload_type
 
     long_df = long_df.copy()
@@ -134,11 +141,18 @@ def apply_update_flag(long_df: pd.DataFrame, reference_path: str) -> pd.DataFram
         )
     ]
 
-    # Reference categories absent from the earliest date's output rows are
-    # no longer part of the plan - flag them for deletion, inserted right
-    # after the earliest date's other rows rather than at the very end.
-    existing_categories = set(long_df.loc[is_earliest, "Category"])
-    missing = [cat for cat in reference if cat not in existing_categories]
+    # Categories the source data has for the earliest date at all (whether
+    # kept as ADD/UPDATE or dropped for matching the reference exactly) -
+    # used below to find reference categories missing from the source
+    # entirely, not ones we just dropped for matching.
+    categories_in_source = set(long_df.loc[is_earliest, "Category"])
+    long_df = long_df[long_df["UploadType"] != "_DROP_"]
+    is_earliest = long_df["PlanDate"] == earliest_date
+
+    # Reference categories absent from the source data are no longer part
+    # of the plan - flag them for deletion, inserted right after the
+    # earliest date's other rows rather than at the very end.
+    missing = [cat for cat in reference if cat not in categories_in_source]
     if missing:
         delete_rows = pd.DataFrame(
             {
