@@ -25,6 +25,7 @@ from collections import defaultdict
 from datetime import datetime
 
 import openpyxl
+from openpyxl.styles import PatternFill
 from openpyxl.utils import get_column_letter
 
 SHEET_NAME = "Details"
@@ -33,6 +34,8 @@ TARGET_DIMS = {"width": 0.089, "length": 0.054, "thickness": 0.041, "wiresize": 
 DAILY_QTY_LIMIT = 250_000
 FLAGGED_C_CODES = {"75", "63"}
 FLAGGED_SUBINVENTORY = {"Intransit", "ANODE-INSP"}
+
+EXCEEDS_250K_FILL = PatternFill(start_color="FF92D050", end_color="FF92D050", fill_type="solid")
 
 EXPORT_COLUMNS = [
     "anodeLotID", "partNumber", "Anode", "powderName", "planDate", "quantity",
@@ -156,6 +159,8 @@ def write_daily_summary_sheets(wb, prefix, summary):
     overview.append(["date", "count", "total_quantity", "exceeds_250K"])
     for s in summary:
         overview.append([s["date"], s["count"], s["total_quantity"], s["exceeds_250k"]])
+        if s["exceeds_250k"]:
+            overview.cell(row=overview.max_row, column=4).fill = EXCEEDS_250K_FILL
 
     detail = wb.create_sheet(f"{prefix}_detail")
     detail.append(["date"] + EXPORT_COLUMNS)
