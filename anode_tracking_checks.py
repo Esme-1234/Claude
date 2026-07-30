@@ -14,6 +14,9 @@ the "Details" tab of an Anode Tracking Report workbook:
                                                         (width is not part of the match)
   5. duplicate anodeLotID within the report         -> list rows
   6. anodeLotID also present in a prior report      -> list rows
+     (skip LotIDs whose row in the prior report is
+     manually highlighted blue / Accent1 theme fill,
+     which marks it as already reviewed)
   7. component column, characters 12-13 == '75' or
      '63', and subInventory is Intransit or
      ANODE-INSP                                     -> list rows
@@ -35,6 +38,7 @@ TARGET_DIMS = {"length": 0.054, "thickness": 0.041, "wiresize": 0.0118}
 DAILY_QTY_LIMIT = 250_000
 FLAGGED_C_CODES = {"75", "63"}
 FLAGGED_SUBINVENTORY = {"Intransit", "ANODE-INSP"}
+REVIEWED_HIGHLIGHT_THEME = 4  # Accent1 (blue): row manually marked "already reviewed"
 
 EXCEEDS_250K_FILL = PatternFill(start_color="FF92D050", end_color="FF92D050", fill_type="solid")
 
@@ -54,6 +58,24 @@ def load_rows(path, sheet_name=SHEET_NAME):
             continue
         rows.append(dict(zip(headers, values)))
     return rows
+
+
+def get_reviewed_lot_ids(path, sheet_name=SHEET_NAME, theme=REVIEWED_HIGHLIGHT_THEME):
+    """LotIDs whose row is manually highlighted blue (Accent1 theme fill),
+    marking them as already reviewed / not a real duplicate."""
+    wb = openpyxl.load_workbook(path, data_only=True)
+    ws = wb[sheet_name]
+    headers = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
+    lot_col = headers.index("anodeLotID")
+    reviewed = set()
+    for row in ws.iter_rows(min_row=2):
+        cell = row[lot_col]
+        if cell.value is None:
+            continue
+        f = cell.fill
+        if f.patternType == "solid" and f.fgColor and f.fgColor.type == "theme" and f.fgColor.theme == theme:
+            reviewed.add(cell.value)
+    return reviewed
 
 
 def is_blank(value):
@@ -102,8 +124,9 @@ def check_duplicate_lot_ids(rows):
     return {lot: items for lot, items in seen.items() if len(items) > 1}
 
 
-def check_cross_file_duplicate_lot_ids(rows_current, rows_previous):
+def check_cross_file_duplicate_lot_ids(rows_current, rows_previous, reviewed_lot_ids=frozenset()):
     lots_previous = {r.get("anodeLotID") for r in rows_previous if r.get("anodeLotID")}
+    lots_previous -= reviewed_lot_ids
     return [r for r in rows_current if r.get("anodeLotID") in lots_previous]
 
 
@@ -170,7 +193,7 @@ def write_daily_summary_sheets(wb, prefix, summary):
             detail.append([s["date"]] + [r.get(c) for c in EXPORT_COLUMNS])
 
 
-def build_report(current_rows, previous_rows, output_path):
+def build_report(current_rows, previous_rows, output_path, reviewed_lot_ids=frozenset()):
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
 
@@ -186,7 +209,7 @@ def build_report(current_rows, previous_rows, output_path):
     write_duplicate_lot_sheet(wb, "5_DuplicateLotID", check_duplicate_lot_ids(current_rows))
     write_detail_sheet(
         wb, "6_CrossFileDupLotID",
-        check_cross_file_duplicate_lot_ids(current_rows, previous_rows),
+        check_cross_file_duplicate_lot_ids(current_rows, previous_rows, reviewed_lot_ids),
     )
     write_detail_sheet(wb, "7_C12_IntransitOrInsp", check_c_pos12_status(current_rows))
 
@@ -203,8 +226,9 @@ def main():
 
     current_rows = load_rows(args.current, args.sheet)
     previous_rows = load_rows(args.previous, args.sheet)
+    reviewed_lot_ids = get_reviewed_lot_ids(args.previous, args.sheet)
 
-    build_report(current_rows, previous_rows, args.output)
+    build_report(current_rows, previous_rows, args.output, reviewed_lot_ids)
 
     print(f"Loaded {len(current_rows)} rows from '{args.current}' ({args.sheet}).")
     print(f"Loaded {len(previous_rows)} rows from '{args.previous}' ({args.sheet}).")
@@ -214,7 +238,8 @@ def main():
     print(f"4. Target dimension rows: {len(check_target_dimensions(current_rows))}")
     dup = check_duplicate_lot_ids(current_rows)
     print(f"5. Duplicate LotIDs: {len(dup)} lot(s), {sum(len(v) for v in dup.values())} row(s)")
-    print(f"6. LotIDs also in previous report: {len(check_cross_file_duplicate_lot_ids(current_rows, previous_rows))}")
+    print(f"   ({len(reviewed_lot_ids)} LotID(s) marked reviewed/blue in previous report, excluded from check 6)")
+    print(f"6. LotIDs also in previous report: {len(check_cross_file_duplicate_lot_ids(current_rows, previous_rows, reviewed_lot_ids))}")
     print(f"7. C[12:13] in 75/63 & subInventory Intransit/ANODE-INSP: {len(check_c_pos12_status(current_rows))}")
     print(f"Report written to '{args.output}'.")
 
