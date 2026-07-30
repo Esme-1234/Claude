@@ -8,9 +8,10 @@ the "Details" tab of an Anode Tracking Report workbook:
   2. quantity below 4000                           -> list rows
   3. category == 'B' and partNumber's last 4 chars
      start with '76'                               -> daily count/list summary
-  4. width/length/thickness/wiresize == the target
-     dimension set (0.089 / 0.054 / 0.041 / 0.0118) -> daily count/qty summary,
+  4. length/thickness/wiresize == the target
+     dimension set (0.054 / 0.041 / 0.0118)         -> daily count/qty summary,
                                                         flagged if total qty > 250,000
+                                                        (width is not part of the match)
   5. duplicate anodeLotID within the report         -> list rows
   6. anodeLotID also present in a prior report      -> list rows
   7. component column, characters 12-13 == '75' or
@@ -30,7 +31,7 @@ from openpyxl.utils import get_column_letter
 
 SHEET_NAME = "Details"
 QTY_THRESHOLD = 4000
-TARGET_DIMS = {"width": 0.089, "length": 0.054, "thickness": 0.041, "wiresize": 0.0118}
+TARGET_DIMS = {"length": 0.054, "thickness": 0.041, "wiresize": 0.0118}
 DAILY_QTY_LIMIT = 250_000
 FLAGGED_C_CODES = {"75", "63"}
 FLAGGED_SUBINVENTORY = {"Intransit", "ANODE-INSP"}
