@@ -17,7 +17,7 @@ the "Details" tab of an Anode Tracking Report workbook:
      (skip LotIDs whose row in the prior report is
      manually highlighted blue / Accent1 theme fill,
      which marks it as already reviewed)
-  7. component column, characters 12-13 == '75' or
+  7. component column, characters 11-12 == '75' or
      '63', and subInventory is Intransit or
      ANODE-INSP                                     -> list rows
 
@@ -43,15 +43,19 @@ REVIEWED_HIGHLIGHT_THEME = 4  # Accent1 (blue): row manually marked "already rev
 EXCEEDS_250K_FILL = PatternFill(start_color="FF92D050", end_color="FF92D050", fill_type="solid")
 
 EXPORT_COLUMNS = [
-    "anodeLotID", "partNumber", "Anode", "powderName", "planDate", "quantity",
+    "anodeLotID", "partNumber", "component", "powderName", "planDate", "quantity",
     "category", "width", "length", "thickness", "wiresize", "subInventory",
 ]
+
+
+HEADER_ALIASES = {"Anode": "component"}  # column C is labeled differently across file versions
 
 
 def load_rows(path, sheet_name=SHEET_NAME):
     wb = openpyxl.load_workbook(path, data_only=True)
     ws = wb[sheet_name]
     headers = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
+    headers = [HEADER_ALIASES.get(h, h) for h in headers]
     rows = []
     for values in ws.iter_rows(min_row=2, values_only=True):
         if all(v is None for v in values):
@@ -133,8 +137,8 @@ def check_cross_file_duplicate_lot_ids(rows_current, rows_previous, reviewed_lot
 def check_c_pos12_status(rows):
     out = []
     for r in rows:
-        c_val = r.get("Anode")
-        if isinstance(c_val, str) and len(c_val) >= 13 and c_val[11:13] in FLAGGED_C_CODES:
+        c_val = r.get("component")
+        if isinstance(c_val, str) and len(c_val) >= 12 and c_val[10:12] in FLAGGED_C_CODES:
             if r.get("subInventory") in FLAGGED_SUBINVENTORY:
                 out.append(r)
     return out
@@ -240,7 +244,7 @@ def main():
     print(f"5. Duplicate LotIDs: {len(dup)} lot(s), {sum(len(v) for v in dup.values())} row(s)")
     print(f"   ({len(reviewed_lot_ids)} LotID(s) marked reviewed/blue in previous report, excluded from check 6)")
     print(f"6. LotIDs also in previous report: {len(check_cross_file_duplicate_lot_ids(current_rows, previous_rows, reviewed_lot_ids))}")
-    print(f"7. C[12:13] in 75/63 & subInventory Intransit/ANODE-INSP: {len(check_c_pos12_status(current_rows))}")
+    print(f"7. C[11:12] in 75/63 & subInventory Intransit/ANODE-INSP: {len(check_c_pos12_status(current_rows))}")
     print(f"Report written to '{args.output}'.")
 
 
