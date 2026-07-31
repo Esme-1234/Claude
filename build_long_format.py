@@ -5,15 +5,21 @@ upload sheet: UploadType / PartNumber / PlanDate / BatchesPerDay.
 Scope: one week, starting from the date in the Summary sheet's D1 cell
 (the most recent Saturday) through the following Friday.
 
+Extraction rule: a cell counts as a genuine "batches per day" entry only if
+it is a literal number typed directly into the sheet (not a formula). This
+naturally includes every hand-entered part-number row -- whether it sits in
+a QTY-labeled block (687/D sheets) or stands alone further down the sheet
+(e.g. rows 33+ on the D sheet) -- and naturally excludes every derived cell:
+the QTY row itself (QTY = part row * batch size), and Total/Non-687/subtotal
+rows (all SUM-style formulas), since those are formulas rather than literals.
+
 Usage:
     python3 build_long_format.py CategorySIPMaintain.7.23.xlsx CategorySIPMaintain.7.23.long.xlsx
 """
 import sys
-import re
 import datetime
 import openpyxl
 from openpyxl.styles import Font, PatternFill
-from openpyxl.utils import get_column_letter
 
 
 def get_start_date(wbd):
@@ -37,49 +43,20 @@ def find_target_cols(ws, target_dates):
     return cols
 
 
-def extract_qty_block_sheet(wsf, wsd, sheet_name, target_dates, results):
-    """
-    687 / D sheet layout: a part-number row holds the raw "batches per day"
-    value; the row directly below is labeled 'QTY' and holds a formula that
-    multiplies the part-number row by a batch size (e.g. '=HF2*42'). Only
-    rows matching that pattern are genuine part entries -- this automatically
-    skips category headers, Non-687/Total footers, and roll-up/SUM rows.
-    """
+def extract_sheet(wsf, wsd, sheet_name, target_dates, results):
     cols = find_target_cols(wsf, target_dates)
     assert len(cols) == 7, (sheet_name, cols)
-    col_letter = get_column_letter(cols[0])
-
-    for r in range(1, wsf.max_row):
-        part = wsf.cell(row=r, column=1).value
-        if part is None or part == 'QTY':
-            continue
-        if wsf.cell(row=r + 1, column=1).value != 'QTY':
-            continue
-        formula = wsf.cell(row=r + 1, column=cols[0]).value
-        if not (isinstance(formula, str) and formula.startswith('=')):
-            continue
-        if not re.search(rf'(?<![A-Za-z0-9]){col_letter}{r}(?![0-9])', formula):
-            continue
-
-        for col, d in zip(cols, target_dates):
-            v = wsd.cell(row=r, column=col).value
-            if v is not None and v != 0:
-                results.append((part, d, v))
-
-
-def extract_flat_sheet(wsf, wsd, target_dates, results):
-    """Rest sheet layout: no separate QTY row, values sit directly on the part-number row."""
-    cols = find_target_cols(wsf, target_dates)
-    assert len(cols) == 7, cols
 
     for r in range(2, wsf.max_row + 1):
         part = wsf.cell(row=r, column=1).value
-        if part is None:
+        if part is None or part == 'QTY':
             continue
         for col, d in zip(cols, target_dates):
-            v = wsd.cell(row=r, column=col).value
-            if v is not None and v != 0:
-                results.append((part, d, v))
+            raw = wsf.cell(row=r, column=col).value
+            if isinstance(raw, str) and raw.startswith('='):
+                continue  # derived cell (QTY multiplier, Total/subtotal roll-up) -- skip
+            if isinstance(raw, (int, float)) and not isinstance(raw, bool) and raw != 0:
+                results.append((part, d, wsd.cell(row=r, column=col).value))
 
 
 def build(src_path, out_path):
@@ -91,9 +68,8 @@ def build(src_path, out_path):
     weekend_dates = {target_dates[0], target_dates[1]}
 
     results = []  # (part_number, date, batches_per_day)
-    for sheet_name in ('687', 'D'):
-        extract_qty_block_sheet(wbf[sheet_name], wbd[sheet_name], sheet_name, target_dates, results)
-    extract_flat_sheet(wbf['Rest'], wbd['Rest'], target_dates, results)
+    for sheet_name in ('687', 'D', 'Rest'):
+        extract_sheet(wbf[sheet_name], wbd[sheet_name], sheet_name, target_dates, results)
 
     out_wb = openpyxl.Workbook()
     ws = out_wb.active
