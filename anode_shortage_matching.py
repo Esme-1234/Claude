@@ -62,7 +62,8 @@ ANODE_SHEET = "details"
 
 LOADING_COL = {"part_number": "D", "qty": "F", "date": "E", "anode_code": "C", "kpcs": "AE"}
 PLANNING_COL = {"part_number": "B", "qty": "F"}
-ANODE_COL = {"anode_code": "C", "plan_date": "E", "qty": "F", "waybill": "G", "subinventory": "H", "lot": "A"}
+ANODE_COL = {"anode_code": "C", "powder_type": "D", "plan_date": "E", "qty": "F", "waybill": "G",
+             "subinventory": "H", "lot": "A"}
 
 WAYBILL_DATE_RE = re.compile(r"^MES-(\d{2})(\d{2})(\d{2})")
 USABLE_DIRECT_STATUSES = {"ANODE-KO", "ANODE-INSP"}
@@ -179,6 +180,7 @@ def get_available_anode(anode_path, anode_codes_needed, anode_cutoff_date):
     ws = wb[ANODE_SHEET]
 
     code_i = _col_idx(ANODE_COL["anode_code"])
+    powder_i = _col_idx(ANODE_COL["powder_type"])
     plan_date_i = _col_idx(ANODE_COL["plan_date"])
     qty_i = _col_idx(ANODE_COL["qty"])
     waybill_i = _col_idx(ANODE_COL["waybill"])
@@ -196,12 +198,14 @@ def get_available_anode(anode_path, anode_codes_needed, anode_cutoff_date):
         subinventory = row[sub_i]
         waybill = row[waybill_i]
         qty = row[qty_i] or 0
+        powder_type = row[powder_i]
 
         if not is_usable_lot(plan_date, subinventory, waybill, anode_cutoff_date):
             continue
 
         available[code] += qty
-        lots[code].append((row[lot_i], code, qty, subinventory, waybill, parse_waybill_date(waybill)))
+        lots[code].append((row[lot_i], code, powder_type, plan_date, qty, waybill,
+                            subinventory, parse_waybill_date(waybill)))
 
     wb.close()
     return available, lots
@@ -241,14 +245,16 @@ def build_report(loading_path, planning_path, anode_path, date_start, date_end,
             "anode_covers_shortage": available_qty >= shortage_qty,
         })
 
-        for lot_number, code, qty, subinventory, waybill, wb_date in lots.get(anode_code, []):
+        for lot_number, code, powder_type, plan_date, qty, waybill, subinventory, wb_date in lots.get(anode_code, []):
             detail_rows.append({
                 "part_number": part,
                 "anode_code": code,
                 "lot_number": lot_number,
+                "powder_type": powder_type,
+                "plan_date": plan_date,
                 "qty": qty,
-                "subinventory": subinventory,
                 "waybill": waybill,
+                "subinventory": subinventory,
                 "waybill_date": wb_date,
             })
 
@@ -276,13 +282,17 @@ def save(summary_rows, detail_rows, params, output_path):
             ws[f"{col}{row}"].number_format = "#,##0"
 
     ws_detail = wb.create_sheet("Anode_Lot_Detail")
-    ws_detail.append(["PartNumber", "AnodeCode", "LotNumber", "QTY", "SUBINVENTORY", "WAYBILL", "WaybillDate"])
+    ws_detail.append(["PartNumber", "AnodeCode", "LotNumber", "PowderType", "PlanDate", "QTY",
+                       "WAYBILL", "SUBINVENTORY", "WaybillDate"])
     for r in detail_rows:
-        ws_detail.append([r["part_number"], r["anode_code"], r["lot_number"], r["qty"],
-                           r["subinventory"], r["waybill"],
-                           r["waybill_date"].isoformat() if r["waybill_date"] else None])
-    for col, width in zip("ABCDEFG", (26, 22, 16, 12, 16, 16, 14)):
+        ws_detail.append([r["part_number"], r["anode_code"], r["lot_number"], r["powder_type"],
+                           r["plan_date"], r["qty"], r["waybill"], r["subinventory"],
+                           r["waybill_date"]])
+    for col, width in zip("ABCDEFGHI", (26, 22, 16, 12, 12, 12, 16, 16, 14)):
         ws_detail.column_dimensions[col].width = width
+    for row in range(2, ws_detail.max_row + 1):
+        ws_detail[f"E{row}"].number_format = "yyyy-mm-dd"
+        ws_detail[f"I{row}"].number_format = "yyyy-mm-dd"
 
     ws_params = wb.create_sheet("Parameters")
     ws_params.append(["Parameter", "Value"])
