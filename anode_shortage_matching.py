@@ -61,7 +61,7 @@ LOADING_SHEET = "KEMET_GOP_ATO_ANALYSIS_DAILY"
 PLANNING_SHEET = "Sheet1"
 ANODE_SHEET = "details"
 
-LOADING_COL = {"part_number": "D", "qty": "F", "date": "E", "anode_code": "C", "kpcs": "AE"}
+LOADING_COL = {"part_number": "D", "qty": "F", "date": "E", "anode_code": "C", "kpcs": "AE", "category": "A"}
 PLANNING_COL = {"part_number": "B", "qty": "F"}
 ANODE_COL = {"anode_code": "C", "powder_type": "D", "plan_date": "E", "qty": "F", "waybill": "G",
              "subinventory": "H", "lot": "A"}
@@ -123,9 +123,11 @@ def get_demand(loading_path, date_start, date_end, kpcs_threshold):
     date_i = _col_idx(LOADING_COL["date"])
     anode_i = _col_idx(LOADING_COL["anode_code"])
     kpcs_i = _col_idx(LOADING_COL["kpcs"])
+    category_i = _col_idx(LOADING_COL["category"])
 
     required = defaultdict(float)
     anode_code_by_part = {}
+    category_by_part = {}
 
     for row in ws.iter_rows(min_row=2, values_only=True):
         part = row[part_i]
@@ -133,6 +135,8 @@ def get_demand(loading_path, date_start, date_end, kpcs_threshold):
             continue
         if anode_code_by_part.get(part) is None and row[anode_i]:
             anode_code_by_part[part] = row[anode_i]
+        if category_by_part.get(part) is None and row[category_i]:
+            category_by_part[part] = row[category_i]
 
         row_date = _to_date(row[date_i])
         kpcs = row[kpcs_i]
@@ -144,7 +148,7 @@ def get_demand(loading_path, date_start, date_end, kpcs_threshold):
         required[part] += row[qty_i] or 0
 
     wb.close()
-    return required, anode_code_by_part
+    return required, anode_code_by_part, category_by_part
 
 
 def get_planned(planning_path):
@@ -214,7 +218,7 @@ def get_available_anode(anode_path, anode_codes_needed, anode_cutoff_date):
 
 def build_report(loading_path, planning_path, anode_path, date_start, date_end,
                   kpcs_threshold, anode_cutoff_date):
-    required, anode_code_by_part = get_demand(loading_path, date_start, date_end, kpcs_threshold)
+    required, anode_code_by_part, category_by_part = get_demand(loading_path, date_start, date_end, kpcs_threshold)
     planned = get_planned(planning_path)
 
     shortages = {}
@@ -248,6 +252,7 @@ def build_report(loading_path, planning_path, anode_path, date_start, date_end,
 
         for lot_number, code, powder_type, plan_date, qty, waybill, subinventory, wb_date in lots.get(anode_code, []):
             detail_rows.append({
+                "category": category_by_part.get(part),
                 "part_number": part,
                 "anode_code": code,
                 "lot_number": lot_number,
@@ -283,19 +288,19 @@ def save(summary_rows, detail_rows, params, output_path):
             ws[f"{col}{row}"].number_format = "#,##0"
 
     ws_detail = wb.create_sheet("Anode_Lot_Detail")
-    ws_detail.append(["LotNumber", "PartNumber", "AnodeCode", "PowderType", "PlanDate", "QTY",
+    ws_detail.append(["Category", "LotNumber", "PartNumber", "AnodeCode", "PowderType", "PlanDate", "QTY",
                        "WAYBILL", "SUBINVENTORY", "WaybillDate",
                        "PartNumber1", "Anode1", "LotNumber1", "QTY1"])
     for r in detail_rows:
-        ws_detail.append([r["lot_number"], r["part_number"], r["anode_code"], r["powder_type"],
+        ws_detail.append([r["category"], r["lot_number"], r["part_number"], r["anode_code"], r["powder_type"],
                            r["plan_date"], r["qty"], r["waybill"], r["subinventory"],
                            r["waybill_date"],
                            r["part_number"], r["anode_code"], r["lot_number"], r["qty"]])
-    for col, width in zip("ABCDEFGHIJKLM", (16, 26, 22, 12, 12, 12, 16, 16, 14, 26, 22, 16, 12)):
+    for col, width in zip("ABCDEFGHIJKLMN", (14, 16, 26, 22, 12, 12, 12, 16, 16, 14, 26, 22, 16, 12)):
         ws_detail.column_dimensions[col].width = width
     for row in range(2, ws_detail.max_row + 1):
-        ws_detail[f"E{row}"].number_format = "yyyy-mm-dd"
-        ws_detail[f"I{row}"].number_format = "yyyy-mm-dd"
+        ws_detail[f"F{row}"].number_format = "yyyy-mm-dd"
+        ws_detail[f"J{row}"].number_format = "yyyy-mm-dd"
 
     lot_counts = defaultdict(int)
     for r in detail_rows:
@@ -303,7 +308,12 @@ def save(summary_rows, detail_rows, params, output_path):
     duplicate_fill = PatternFill(start_color="FFD9A0", end_color="FFD9A0", fill_type="solid")
     for row_idx, r in enumerate(detail_rows, start=2):
         if lot_counts[r["lot_number"]] > 1:
-            ws_detail[f"A{row_idx}"].fill = duplicate_fill
+            ws_detail[f"B{row_idx}"].fill = duplicate_fill
+
+    mirror_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+    for row_idx in range(1, ws_detail.max_row + 1):
+        for col in "KLMN":
+            ws_detail[f"{col}{row_idx}"].fill = mirror_fill
 
     ws_params = wb.create_sheet("Parameters")
     ws_params.append(["Parameter", "Value"])
