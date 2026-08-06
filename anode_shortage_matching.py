@@ -298,7 +298,7 @@ def save(summary_rows, detail_rows, params, output_path):
     lot_counts = defaultdict(int)
     for r in detail_rows:
         lot_counts[r["lot_number"]] += 1
-    duplicate_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+    duplicate_fill = PatternFill(start_color="FFD9A0", end_color="FFD9A0", fill_type="solid")
     for row_idx, r in enumerate(detail_rows, start=2):
         if lot_counts[r["lot_number"]] > 1:
             ws_detail[f"A{row_idx}"].fill = duplicate_fill
