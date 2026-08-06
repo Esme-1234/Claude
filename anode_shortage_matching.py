@@ -55,6 +55,7 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 
 import openpyxl
+from openpyxl.styles import PatternFill
 
 LOADING_SHEET = "KEMET_GOP_ATO_ANALYSIS_DAILY"
 PLANNING_SHEET = "Sheet1"
@@ -282,17 +283,25 @@ def save(summary_rows, detail_rows, params, output_path):
             ws[f"{col}{row}"].number_format = "#,##0"
 
     ws_detail = wb.create_sheet("Anode_Lot_Detail")
-    ws_detail.append(["PartNumber", "AnodeCode", "LotNumber", "PowderType", "PlanDate", "QTY",
+    ws_detail.append(["LotNumber", "PartNumber", "AnodeCode", "PowderType", "PlanDate", "QTY",
                        "WAYBILL", "SUBINVENTORY", "WaybillDate"])
     for r in detail_rows:
-        ws_detail.append([r["part_number"], r["anode_code"], r["lot_number"], r["powder_type"],
+        ws_detail.append([r["lot_number"], r["part_number"], r["anode_code"], r["powder_type"],
                            r["plan_date"], r["qty"], r["waybill"], r["subinventory"],
                            r["waybill_date"]])
-    for col, width in zip("ABCDEFGHI", (26, 22, 16, 12, 12, 12, 16, 16, 14)):
+    for col, width in zip("ABCDEFGHI", (16, 26, 22, 12, 12, 12, 16, 16, 14)):
         ws_detail.column_dimensions[col].width = width
     for row in range(2, ws_detail.max_row + 1):
         ws_detail[f"E{row}"].number_format = "yyyy-mm-dd"
         ws_detail[f"I{row}"].number_format = "yyyy-mm-dd"
+
+    lot_counts = defaultdict(int)
+    for r in detail_rows:
+        lot_counts[r["lot_number"]] += 1
+    duplicate_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+    for row_idx, r in enumerate(detail_rows, start=2):
+        if lot_counts[r["lot_number"]] > 1:
+            ws_detail[f"A{row_idx}"].fill = duplicate_fill
 
     ws_params = wb.create_sheet("Parameters")
     ws_params.append(["Parameter", "Value"])
