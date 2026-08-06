@@ -284,12 +284,14 @@ def save(summary_rows, detail_rows, params, output_path):
 
     ws_detail = wb.create_sheet("Anode_Lot_Detail")
     ws_detail.append(["LotNumber", "PartNumber", "AnodeCode", "PowderType", "PlanDate", "QTY",
-                       "WAYBILL", "SUBINVENTORY", "WaybillDate"])
+                       "WAYBILL", "SUBINVENTORY", "WaybillDate",
+                       "PartNumber1", "Anode1", "LotNumber1", "QTY1"])
     for r in detail_rows:
         ws_detail.append([r["lot_number"], r["part_number"], r["anode_code"], r["powder_type"],
                            r["plan_date"], r["qty"], r["waybill"], r["subinventory"],
-                           r["waybill_date"]])
-    for col, width in zip("ABCDEFGHI", (16, 26, 22, 12, 12, 12, 16, 16, 14)):
+                           r["waybill_date"],
+                           r["part_number"], r["anode_code"], r["lot_number"], r["qty"]])
+    for col, width in zip("ABCDEFGHIJKLM", (16, 26, 22, 12, 12, 12, 16, 16, 14, 26, 22, 16, 12)):
         ws_detail.column_dimensions[col].width = width
     for row in range(2, ws_detail.max_row + 1):
         ws_detail[f"E{row}"].number_format = "yyyy-mm-dd"
