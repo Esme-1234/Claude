@@ -27,7 +27,10 @@ Pipeline
      b) column H is "Intransit" AND the date encoded in column G (WAYBILL,
         e.g. "MES-260724B384" -> positions 5-10 = YYMMDD = 2026-07-24) is
         before a configurable cutoff date.
-   Usable lots' column F (QTY) are summed to AvailableAnodeQty.
+   LOT_NUMBERs that appear more than once anywhere in column A (the same rows
+   Excel's "Highlight Duplicate Values" conditional format flags in pink) are
+   excluded entirely, since a repeated lot number in the source data is
+   unreliable. Usable lots' column F (QTY) are summed to AvailableAnodeQty.
 
 4. Output: every shortage part number that has at least one usable anode lot
    (RequiredQty, PlannedQty, ShortageQty, AvailableAnodeQty, ...), plus a
@@ -189,7 +192,13 @@ def is_usable_lot(plan_date, subinventory, waybill, anode_cutoff_date):
 
 
 def get_available_anode(anode_path, anode_codes_needed, anode_cutoff_date):
-    """Return (available_qty_by_code, lot_rows_by_code) for the requested anode codes."""
+    """Return (available_qty_by_code, lot_rows_by_code) for the requested anode codes.
+
+    LOT_NUMBERs that appear more than once anywhere in the sheet's column A (the
+    same duplicates Excel's "Highlight Duplicate Values" conditional formatting
+    flags in pink on the source file) are treated as unreliable and excluded
+    entirely, regardless of anode code or usability status.
+    """
     wb = openpyxl.load_workbook(anode_path, read_only=True, data_only=True)
     ws = wb[ANODE_SHEET]
 
@@ -201,13 +210,25 @@ def get_available_anode(anode_path, anode_codes_needed, anode_cutoff_date):
     sub_i = _col_idx(ANODE_COL["subinventory"])
     lot_i = _col_idx(ANODE_COL["lot"])
 
+    rows = []
+    lot_counts = defaultdict(int)
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        lot = row[lot_i]
+        if lot:
+            lot_counts[lot] += 1
+        rows.append(row)
+    wb.close()
+
     available = defaultdict(float)
     lots = defaultdict(list)
 
-    for row in ws.iter_rows(min_row=2, values_only=True):
+    for row in rows:
         code = row[code_i]
+        lot = row[lot_i]
         if code not in anode_codes_needed:
             continue
+        if not lot or lot_counts[lot] > 1:
+            continue  # duplicated LOT_NUMBER in the source sheet -> excluded
         plan_date = _to_date(row[plan_date_i])
         subinventory = row[sub_i]
         waybill = row[waybill_i]
@@ -218,10 +239,9 @@ def get_available_anode(anode_path, anode_codes_needed, anode_cutoff_date):
             continue
 
         available[code] += qty
-        lots[code].append((row[lot_i], code, powder_type, plan_date, qty, waybill,
+        lots[code].append((lot, code, powder_type, plan_date, qty, waybill,
                             subinventory, parse_waybill_date(waybill)))
 
-    wb.close()
     return available, lots
 
 
