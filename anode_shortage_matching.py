@@ -69,7 +69,7 @@ ANODE_SHEET = "details"
 LOADING_COL = {"part_number": "PARENT_ITEM", "qty": "Actual Start Qty", "date": "SUGG_START_DATE",
                "anode_code": "Anode", "kpcs": "Kpcs/Cycles", "category": "Anode Category",
                "total_cycle": "Total Cycle", "elect_type": "Elect Type"}
-PLANNING_COL = {"part_number": "partNumber", "qty": "quantity"}
+PLANNING_COL = {"part_number": "partNumber", "qty": "quantity", "lot_id": "anodeLotID"}
 ANODE_COL = {"anode_code": "ITEM_NAME", "powder_type": "PowderType", "plan_date": "PlanDate", "qty": "QTY",
              "waybill": "WAYBILL", "subinventory": "SUBINVENTORY", "lot": "LOT_NUMBER"}
 
@@ -187,15 +187,19 @@ def get_planned(planning_path):
     idx = _header_indices(ws, PLANNING_COL)
     part_i = idx["part_number"]
     qty_i = idx["qty"]
+    lot_id_i = idx["lot_id"]
 
     planned = defaultdict(float)
+    used_lot_ids = set()
     for row in ws.iter_rows(min_row=2, values_only=True):
         part = row[part_i]
         if part:
             planned[part] += row[qty_i] or 0
+        if row[lot_id_i]:
+            used_lot_ids.add(row[lot_id_i])
 
     wb.close()
-    return planned
+    return planned, used_lot_ids
 
 
 def is_usable_lot(plan_date, subinventory, waybill, anode_cutoff_date):
@@ -209,13 +213,16 @@ def is_usable_lot(plan_date, subinventory, waybill, anode_cutoff_date):
     return False
 
 
-def get_available_anode(anode_path, anode_codes_needed, anode_cutoff_date):
+def get_available_anode(anode_path, anode_codes_needed, anode_cutoff_date, used_lot_ids=frozenset()):
     """Return (available_qty_by_code, lot_rows_by_code) for the requested anode codes.
 
     LOT_NUMBERs that appear more than once anywhere in the sheet's column A (the
     same duplicates Excel's "Highlight Duplicate Values" conditional formatting
     flags in pink on the source file) are treated as unreliable and excluded
-    entirely, regardless of anode code or usability status.
+    entirely, regardless of anode code or usability status. LOT_NUMBERs already
+    listed as an anodeLotID in PlanningResult (i.e. already consumed by planning
+    and counted in PlannedQty) are excluded too, so the same physical lot is
+    never counted as both "planned" and "still available".
     """
     wb = openpyxl.load_workbook(anode_path, read_only=True, data_only=True)
     ws = wb[ANODE_SHEET]
@@ -248,6 +255,8 @@ def get_available_anode(anode_path, anode_codes_needed, anode_cutoff_date):
             continue
         if not lot or lot_counts[lot] > 1:
             continue  # duplicated LOT_NUMBER in the source sheet -> excluded
+        if lot in used_lot_ids:
+            continue  # already consumed by a PlanningResult row -> excluded
         plan_date = _to_date(row[plan_date_i])
         subinventory = row[sub_i]
         waybill = row[waybill_i]
@@ -268,7 +277,7 @@ def build_report(loading_path, planning_path, anode_path, date_start, date_end,
                   kpcs_threshold, anode_cutoff_date):
     required, anode_code_by_part, category_by_part, total_cycle_by_part, elect_type_by_part = get_demand(
         loading_path, date_start, date_end, kpcs_threshold)
-    planned = get_planned(planning_path)
+    planned, used_lot_ids = get_planned(planning_path)
 
     shortages = {}
     for part, req_qty in required.items():
@@ -278,7 +287,7 @@ def build_report(loading_path, planning_path, anode_path, date_start, date_end,
             shortages[part] = (req_qty, planned_qty, shortage_qty)
 
     anode_codes_needed = {anode_code_by_part[p] for p in shortages if anode_code_by_part.get(p)}
-    available, lots = get_available_anode(anode_path, anode_codes_needed, anode_cutoff_date)
+    available, lots = get_available_anode(anode_path, anode_codes_needed, anode_cutoff_date, used_lot_ids)
 
     summary_rows = []
     detail_rows = []
