@@ -64,19 +64,35 @@ LOADING_SHEET = "KEMET_GOP_ATO_ANALYSIS_DAILY"
 PLANNING_SHEET = "Sheet1"
 ANODE_SHEET = "details"
 
-LOADING_COL = {"part_number": "D", "qty": "F", "date": "E", "anode_code": "C", "kpcs": "AE", "category": "A",
-               "total_cycle": "X", "elect_type": "Y"}
-PLANNING_COL = {"part_number": "B", "qty": "F"}
-ANODE_COL = {"anode_code": "C", "powder_type": "D", "plan_date": "E", "qty": "F", "waybill": "G",
-             "subinventory": "H", "lot": "A"}
+# Columns are located by header text, not fixed letters, because source files are
+# re-uploaded from time to time with columns inserted/reordered.
+LOADING_COL = {"part_number": "PARENT_ITEM", "qty": "Actual Start Qty", "date": "SUGG_START_DATE",
+               "anode_code": "Anode", "kpcs": "Kpcs/Cycles", "category": "Anode Category",
+               "total_cycle": "Total Cycle", "elect_type": "Elect Type"}
+PLANNING_COL = {"part_number": "partNumber", "qty": "quantity"}
+ANODE_COL = {"anode_code": "ITEM_NAME", "powder_type": "PowderType", "plan_date": "PlanDate", "qty": "QTY",
+             "waybill": "WAYBILL", "subinventory": "SUBINVENTORY", "lot": "LOT_NUMBER"}
 
 WAYBILL_DATE_RE = re.compile(r"^MES-(\d{2})(\d{2})(\d{2})")
 USABLE_DIRECT_STATUSES = {"ANODE-KO", "ANODE-INSP"}
 INTRANSIT_STATUS = "Intransit"
 
 
-def _col_idx(letter):
-    return openpyxl.utils.column_index_from_string(letter) - 1
+def _header_indices(ws, wanted):
+    """Map {key: 0-based column index} for the header names in `wanted` (a dict of key->header text)."""
+    header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
+    name_to_idx = {name: i for i, name in enumerate(header_row) if name is not None}
+    result = {}
+    missing = []
+    for key, header_name in wanted.items():
+        if header_name in name_to_idx:
+            result[key] = name_to_idx[header_name]
+        else:
+            missing.append(header_name)
+    if missing:
+        raise ValueError(f"Column header(s) not found in sheet '{ws.title}': {missing}. "
+                          f"Available headers: {sorted(n for n in name_to_idx)}")
+    return result
 
 
 def _to_date(value):
@@ -122,14 +138,15 @@ def get_demand(loading_path, date_start, date_end, kpcs_threshold):
     wb = openpyxl.load_workbook(loading_path, read_only=True, data_only=True)
     ws = wb[LOADING_SHEET]
 
-    part_i = _col_idx(LOADING_COL["part_number"])
-    qty_i = _col_idx(LOADING_COL["qty"])
-    date_i = _col_idx(LOADING_COL["date"])
-    anode_i = _col_idx(LOADING_COL["anode_code"])
-    kpcs_i = _col_idx(LOADING_COL["kpcs"])
-    category_i = _col_idx(LOADING_COL["category"])
-    total_cycle_i = _col_idx(LOADING_COL["total_cycle"])
-    elect_type_i = _col_idx(LOADING_COL["elect_type"])
+    idx = _header_indices(ws, LOADING_COL)
+    part_i = idx["part_number"]
+    qty_i = idx["qty"]
+    date_i = idx["date"]
+    anode_i = idx["anode_code"]
+    kpcs_i = idx["kpcs"]
+    category_i = idx["category"]
+    total_cycle_i = idx["total_cycle"]
+    elect_type_i = idx["elect_type"]
 
     required = defaultdict(float)
     anode_code_by_part = {}
@@ -167,8 +184,9 @@ def get_planned(planning_path):
     wb = openpyxl.load_workbook(planning_path, read_only=True, data_only=True)
     ws = wb[PLANNING_SHEET]
 
-    part_i = _col_idx(PLANNING_COL["part_number"])
-    qty_i = _col_idx(PLANNING_COL["qty"])
+    idx = _header_indices(ws, PLANNING_COL)
+    part_i = idx["part_number"]
+    qty_i = idx["qty"]
 
     planned = defaultdict(float)
     for row in ws.iter_rows(min_row=2, values_only=True):
@@ -202,13 +220,14 @@ def get_available_anode(anode_path, anode_codes_needed, anode_cutoff_date):
     wb = openpyxl.load_workbook(anode_path, read_only=True, data_only=True)
     ws = wb[ANODE_SHEET]
 
-    code_i = _col_idx(ANODE_COL["anode_code"])
-    powder_i = _col_idx(ANODE_COL["powder_type"])
-    plan_date_i = _col_idx(ANODE_COL["plan_date"])
-    qty_i = _col_idx(ANODE_COL["qty"])
-    waybill_i = _col_idx(ANODE_COL["waybill"])
-    sub_i = _col_idx(ANODE_COL["subinventory"])
-    lot_i = _col_idx(ANODE_COL["lot"])
+    idx = _header_indices(ws, ANODE_COL)
+    code_i = idx["anode_code"]
+    powder_i = idx["powder_type"]
+    plan_date_i = idx["plan_date"]
+    qty_i = idx["qty"]
+    waybill_i = idx["waybill"]
+    sub_i = idx["subinventory"]
+    lot_i = idx["lot"]
 
     rows = []
     lot_counts = defaultdict(int)
