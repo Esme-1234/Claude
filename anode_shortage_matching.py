@@ -133,6 +133,30 @@ def parse_waybill_date(waybill):
         return None
 
 
+def build_cumulative_demand(demand_rows):
+    """[(date, qty), ...] (any order, duplicate dates allowed) -> [(date, cumulative_qty), ...] sorted ascending."""
+    by_date = defaultdict(float)
+    for d, qty in demand_rows:
+        by_date[d] += qty or 0
+    curve = []
+    running = 0.0
+    for d in sorted(by_date):
+        running += by_date[d]
+        curve.append((d, running))
+    return curve
+
+
+def covered_through_date(cumulative_curve, supply_qty):
+    """Latest date whose cumulative demand is fully covered by supply_qty, or None if none is."""
+    result = None
+    for d, cum_qty in cumulative_curve:
+        if cum_qty <= supply_qty:
+            result = d
+        else:
+            break
+    return result
+
+
 def get_demand(loading_path, date_start, date_end, kpcs_threshold):
     """Return (required_qty_by_part, anode_code_by_part)."""
     wb = openpyxl.load_workbook(loading_path, read_only=True, data_only=True)
@@ -153,6 +177,7 @@ def get_demand(loading_path, date_start, date_end, kpcs_threshold):
     category_by_part = {}
     total_cycle_by_part = {}
     elect_type_by_part = {}
+    demand_rows_by_part = defaultdict(list)
 
     for row in ws.iter_rows(min_row=2, values_only=True):
         part = row[part_i]
@@ -174,10 +199,13 @@ def get_demand(loading_path, date_start, date_end, kpcs_threshold):
         if kpcs is None or not (kpcs > kpcs_threshold):
             continue
 
-        required[part] += row[qty_i] or 0
+        qty = row[qty_i] or 0
+        required[part] += qty
+        demand_rows_by_part[part].append((row_date, qty))
 
     wb.close()
-    return required, anode_code_by_part, category_by_part, total_cycle_by_part, elect_type_by_part
+    return (required, anode_code_by_part, category_by_part, total_cycle_by_part, elect_type_by_part,
+            demand_rows_by_part)
 
 
 def get_planned(planning_path):
@@ -277,8 +305,8 @@ def get_available_anode(anode_path, anode_codes_needed, anode_cutoff_date, used_
 
 def build_report(loading_path, planning_path, anode_path, date_start, date_end,
                   kpcs_threshold, anode_cutoff_date, cutoff_inclusive=False):
-    required, anode_code_by_part, category_by_part, total_cycle_by_part, elect_type_by_part = get_demand(
-        loading_path, date_start, date_end, kpcs_threshold)
+    (required, anode_code_by_part, category_by_part, total_cycle_by_part, elect_type_by_part,
+     demand_rows_by_part) = get_demand(loading_path, date_start, date_end, kpcs_threshold)
     planned, used_lot_ids = get_planned(planning_path)
 
     shortages = {}
@@ -311,8 +339,13 @@ def build_report(loading_path, planning_path, anode_path, date_start, date_end,
             "anode_covers_shortage": available_qty >= shortage_qty,
         })
 
-        for lot_number, code, powder_type, plan_date, qty, waybill, subinventory, wb_date in lots.get(anode_code, []):
+        cumulative_curve = build_cumulative_demand(demand_rows_by_part.get(part, []))
+        part_lots = sorted(lots.get(anode_code, []), key=lambda entry: entry[7] or date.min)
+        running_supply = planned_qty
+        for lot_number, code, powder_type, plan_date, qty, waybill, subinventory, wb_date in part_lots:
+            running_supply += qty
             detail_rows.append({
+                "covered_through_date": covered_through_date(cumulative_curve, running_supply),
                 "category": category_by_part.get(part),
                 "total_cycle": total_cycle_by_part.get(part),
                 "elect_type": elect_type_by_part.get(part),
@@ -351,20 +384,21 @@ def save(summary_rows, detail_rows, params, output_path):
             ws[f"{col}{row}"].number_format = "#,##0"
 
     ws_detail = wb.create_sheet("Anode_Lot_Detail")
-    ws_detail.append(["Category", "TotalCycle", "ElectType", "LotNumber", "PartNumber", "AnodeCode",
-                       "PowderType", "PlanDate", "QTY", "WAYBILL", "SUBINVENTORY", "WaybillDate",
+    ws_detail.append(["Category", "TotalCycle", "ElectType", "CoveredThroughDate", "LotNumber", "PartNumber",
+                       "AnodeCode", "PowderType", "PlanDate", "QTY", "WAYBILL", "SUBINVENTORY", "WaybillDate",
                        "PartNumber1", "Anode1", "LotNumber1", "QTY1"])
     for r in detail_rows:
-        ws_detail.append([r["category"], r["total_cycle"], r["elect_type"], r["lot_number"], r["part_number"],
-                           r["anode_code"], r["powder_type"], r["plan_date"], r["qty"], r["waybill"],
-                           r["subinventory"], r["waybill_date"],
+        ws_detail.append([r["category"], r["total_cycle"], r["elect_type"], r["covered_through_date"],
+                           r["lot_number"], r["part_number"], r["anode_code"], r["powder_type"], r["plan_date"],
+                           r["qty"], r["waybill"], r["subinventory"], r["waybill_date"],
                            r["part_number"], r["anode_code"], r["lot_number"], r["qty"]])
-    widths = (14, 12, 12, 16, 26, 22, 12, 12, 12, 16, 16, 14, 26, 22, 16, 12)
-    for col, width in zip("ABCDEFGHIJKLMNOP", widths):
+    widths = (14, 12, 12, 18, 16, 26, 22, 12, 12, 12, 16, 16, 14, 26, 22, 16, 12)
+    for col, width in zip("ABCDEFGHIJKLMNOPQ", widths):
         ws_detail.column_dimensions[col].width = width
     for row in range(2, ws_detail.max_row + 1):
-        ws_detail[f"H{row}"].number_format = "yyyy-mm-dd"
-        ws_detail[f"L{row}"].number_format = "yyyy-mm-dd"
+        ws_detail[f"D{row}"].number_format = "yyyy-mm-dd"
+        ws_detail[f"I{row}"].number_format = "yyyy-mm-dd"
+        ws_detail[f"M{row}"].number_format = "yyyy-mm-dd"
 
     lot_counts = defaultdict(int)
     for r in detail_rows:
@@ -372,11 +406,11 @@ def save(summary_rows, detail_rows, params, output_path):
     duplicate_fill = PatternFill(start_color="FFD9A0", end_color="FFD9A0", fill_type="solid")
     for row_idx, r in enumerate(detail_rows, start=2):
         if lot_counts[r["lot_number"]] > 1:
-            ws_detail[f"D{row_idx}"].fill = duplicate_fill
+            ws_detail[f"E{row_idx}"].fill = duplicate_fill
 
     mirror_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
     for row_idx in range(1, ws_detail.max_row + 1):
-        for col in "MNOP":
+        for col in "NOPQ":
             ws_detail[f"{col}{row_idx}"].fill = mirror_fill
 
     ws_params = wb.create_sheet("Parameters")
