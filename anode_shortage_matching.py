@@ -136,15 +136,16 @@ def parse_waybill_date(waybill):
 def build_cumulative_demand(demand_rows):
     """[(date, qty), ...] (any order, duplicate dates allowed) -> [(date, cumulative_qty), ...] sorted ascending.
 
-    Each demand row is kept as its own step (not aggregated by date): several
-    rows can share the same SUGG_START_DATE, and covering just the first of
-    them is enough for that date to be the "covered through" answer, without
-    waiting for every same-date row to be covered.
+    All rows sharing the same SUGG_START_DATE are summed into one step: a date
+    only counts as "covered" once every row on it is fully satisfied.
     """
+    by_date = defaultdict(float)
+    for d, qty in demand_rows:
+        by_date[d] += qty or 0
     curve = []
     running = 0.0
-    for d, qty in sorted(demand_rows, key=lambda r: r[0]):
-        running += qty or 0
+    for d in sorted(by_date):
+        running += by_date[d]
         curve.append((d, running))
     return curve
 
