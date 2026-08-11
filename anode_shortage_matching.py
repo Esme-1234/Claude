@@ -181,6 +181,7 @@ def get_demand(loading_path, date_start, date_end, kpcs_threshold):
     total_cycle_by_part = {}
     elect_type_by_part = {}
     demand_rows_by_part = defaultdict(list)
+    full_demand_rows_by_part = defaultdict(list)
 
     for row in ws.iter_rows(min_row=2, values_only=True):
         part = row[part_i]
@@ -197,18 +198,21 @@ def get_demand(loading_path, date_start, date_end, kpcs_threshold):
 
         row_date = _to_date(row[date_i])
         kpcs = row[kpcs_i]
-        if row_date is None or not (date_start <= row_date <= date_end):
-            continue
-        if kpcs is None or not (kpcs > kpcs_threshold):
+        if row_date is None or kpcs is None or not (kpcs > kpcs_threshold):
             continue
 
         qty = row[qty_i] or 0
-        required[part] += qty
-        demand_rows_by_part[part].append((row_date, qty))
+        # Full order backlog for this part (any date), used to see how far the
+        # covered date reaches beyond the near-term demand window.
+        full_demand_rows_by_part[part].append((row_date, qty))
+
+        if date_start <= row_date <= date_end:
+            required[part] += qty
+            demand_rows_by_part[part].append((row_date, qty))
 
     wb.close()
     return (required, anode_code_by_part, category_by_part, total_cycle_by_part, elect_type_by_part,
-            demand_rows_by_part)
+            demand_rows_by_part, full_demand_rows_by_part)
 
 
 def get_planned(planning_path):
@@ -309,7 +313,8 @@ def get_available_anode(anode_path, anode_codes_needed, anode_cutoff_date, used_
 def build_report(loading_path, planning_path, anode_path, date_start, date_end,
                   kpcs_threshold, anode_cutoff_date, cutoff_inclusive=False):
     (required, anode_code_by_part, category_by_part, total_cycle_by_part, elect_type_by_part,
-     demand_rows_by_part) = get_demand(loading_path, date_start, date_end, kpcs_threshold)
+     demand_rows_by_part, full_demand_rows_by_part) = get_demand(
+        loading_path, date_start, date_end, kpcs_threshold)
     planned, used_lot_ids = get_planned(planning_path)
 
     shortages = {}
@@ -342,7 +347,7 @@ def build_report(loading_path, planning_path, anode_path, date_start, date_end,
             "anode_covers_shortage": available_qty >= shortage_qty,
         })
 
-        cumulative_curve = build_cumulative_demand(demand_rows_by_part.get(part, []))
+        cumulative_curve = build_cumulative_demand(full_demand_rows_by_part.get(part, []))
         part_lots = sorted(lots.get(anode_code, []), key=lambda entry: entry[7] or date.min)
         running_supply = planned_qty
         for lot_number, code, powder_type, plan_date, qty, waybill, subinventory, wb_date in part_lots:
