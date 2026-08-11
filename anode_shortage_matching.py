@@ -202,18 +202,20 @@ def get_planned(planning_path):
     return planned, used_lot_ids
 
 
-def is_usable_lot(plan_date, subinventory, waybill, anode_cutoff_date):
+def is_usable_lot(plan_date, subinventory, waybill, anode_cutoff_date, cutoff_inclusive=False):
     sub = (subinventory or "").strip()
     if plan_date is None and sub in USABLE_DIRECT_STATUSES:
         return True
     if sub == INTRANSIT_STATUS:
         wb_date = parse_waybill_date(waybill)
-        if wb_date is not None and wb_date < anode_cutoff_date:
+        if wb_date is not None and (wb_date <= anode_cutoff_date if cutoff_inclusive
+                                     else wb_date < anode_cutoff_date):
             return True
     return False
 
 
-def get_available_anode(anode_path, anode_codes_needed, anode_cutoff_date, used_lot_ids=frozenset()):
+def get_available_anode(anode_path, anode_codes_needed, anode_cutoff_date, used_lot_ids=frozenset(),
+                         cutoff_inclusive=False):
     """Return (available_qty_by_code, lot_rows_by_code) for the requested anode codes.
 
     LOT_NUMBERs that appear more than once anywhere in the sheet's column A (the
@@ -263,7 +265,7 @@ def get_available_anode(anode_path, anode_codes_needed, anode_cutoff_date, used_
         qty = row[qty_i] or 0
         powder_type = row[powder_i]
 
-        if not is_usable_lot(plan_date, subinventory, waybill, anode_cutoff_date):
+        if not is_usable_lot(plan_date, subinventory, waybill, anode_cutoff_date, cutoff_inclusive):
             continue
 
         available[code] += qty
@@ -274,7 +276,7 @@ def get_available_anode(anode_path, anode_codes_needed, anode_cutoff_date, used_
 
 
 def build_report(loading_path, planning_path, anode_path, date_start, date_end,
-                  kpcs_threshold, anode_cutoff_date):
+                  kpcs_threshold, anode_cutoff_date, cutoff_inclusive=False):
     required, anode_code_by_part, category_by_part, total_cycle_by_part, elect_type_by_part = get_demand(
         loading_path, date_start, date_end, kpcs_threshold)
     planned, used_lot_ids = get_planned(planning_path)
@@ -287,7 +289,8 @@ def build_report(loading_path, planning_path, anode_path, date_start, date_end,
             shortages[part] = (req_qty, planned_qty, shortage_qty)
 
     anode_codes_needed = {anode_code_by_part[p] for p in shortages if anode_code_by_part.get(p)}
-    available, lots = get_available_anode(anode_path, anode_codes_needed, anode_cutoff_date, used_lot_ids)
+    available, lots = get_available_anode(anode_path, anode_codes_needed, anode_cutoff_date, used_lot_ids,
+                                           cutoff_inclusive)
 
     summary_rows = []
     detail_rows = []
@@ -412,8 +415,11 @@ def main():
 
     parser.add_argument("--anode-cutoff-date", default="2026-07-27",
                          help="An 'Intransit' anode lot is usable only if its WAYBILL date "
-                              "(column G, positions 5-10 = YYMMDD) is strictly before this date "
-                              "(YYYY-MM-DD). Default: 2026-07-27.")
+                              "(column G, positions 5-10 = YYMMDD) is before this date (YYYY-MM-DD), "
+                              "strictly before unless --anode-cutoff-inclusive is set. Default: 2026-07-27.")
+    parser.add_argument("--anode-cutoff-inclusive", action="store_true",
+                         help="Include the cutoff date itself (WAYBILL date <= cutoff) instead of the "
+                              "default strictly-before comparison.")
 
     args = parser.parse_args()
 
@@ -428,6 +434,7 @@ def main():
     summary_rows, detail_rows = build_report(
         args.loading, args.planning_result, args.anode,
         date_start, date_end, args.kpcs_threshold, anode_cutoff_date,
+        args.anode_cutoff_inclusive,
     )
 
     params = {
@@ -437,7 +444,8 @@ def main():
         "demand_date_start": date_start,
         "demand_date_end": date_end,
         "kpcs_threshold (AE column, strictly greater than)": args.kpcs_threshold,
-        "anode_cutoff_date (Intransit WAYBILL date, strictly before)": anode_cutoff_date,
+        "anode_cutoff_date (Intransit WAYBILL date, {} cutoff)".format(
+            "on or before" if args.anode_cutoff_inclusive else "strictly before"): anode_cutoff_date,
     }
     save(summary_rows, detail_rows, params, args.output)
 
