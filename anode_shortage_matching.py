@@ -369,10 +369,12 @@ def build_report(loading_path, planning_path, anode_path, date_start, date_end,
             running_supply += qty
             covered_through = covered_through_date(cumulative_curve, running_supply)
             if covered_through is not None:
+                # Show the furthest date this lot's addition genuinely finishes covering
+                # (implicitly covers every earlier date too, e.g. 2026-09-14 also means
+                # 2026-09-06 is done).
                 covered_display = covered_through
             else:
-                # Doesn't even cover the earliest date's full-day demand yet -> name
-                # that still-unmet date on every such row, not just the last one.
+                # Doesn't finish off any date yet -> name the still-unmet one.
                 still_short_date = next_uncovered_date(cumulative_curve, running_supply)
                 covered_display = f"{still_short_date}不够" if still_short_date else "不够"
             detail_rows.append({
