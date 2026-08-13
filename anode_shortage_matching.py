@@ -365,18 +365,16 @@ def build_report(loading_path, planning_path, anode_path, date_start, date_end,
         cumulative_curve = build_cumulative_demand(full_demand_rows_by_part.get(part, []))
         part_lots = sorted(lots.get(anode_code, []), key=lambda entry: entry[7] or date.min)
         running_supply = planned_qty
-        for i, (lot_number, code, powder_type, plan_date, qty, waybill, subinventory, wb_date) in enumerate(part_lots):
+        for lot_number, code, powder_type, plan_date, qty, waybill, subinventory, wb_date in part_lots:
             running_supply += qty
             covered_through = covered_through_date(cumulative_curve, running_supply)
             if covered_through is not None:
                 covered_display = covered_through
-            elif i == len(part_lots) - 1:
-                # Last available lot for this part still isn't enough for even the
-                # earliest date's full-day demand -> name that date explicitly.
-                still_short_date = next_uncovered_date(cumulative_curve, running_supply)
-                covered_display = f"{still_short_date} 还不够" if still_short_date else "不够"
             else:
-                covered_display = "不够"
+                # Doesn't even cover the earliest date's full-day demand yet -> name
+                # that still-unmet date on every such row, not just the last one.
+                still_short_date = next_uncovered_date(cumulative_curve, running_supply)
+                covered_display = f"{still_short_date}不够" if still_short_date else "不够"
             detail_rows.append({
                 "covered_through_date": covered_display,
                 "category": category_by_part.get(part),
