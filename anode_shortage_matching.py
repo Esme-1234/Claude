@@ -150,16 +150,18 @@ def build_cumulative_demand(demand_rows):
     return curve
 
 
-def next_uncovered_date(cumulative_curve, supply_qty):
-    """Earliest date whose full-day cumulative demand still exceeds supply_qty, or None if
-    supply_qty already covers the entire backlog. This is meant to be evaluated with the
-    running supply as of *before* a given lot is added, so the lot is labeled with whichever
-    date's demand it is currently being applied toward (even if it doesn't finish paying it
-    off), not the date already fully paid off."""
+def covered_through_date(cumulative_curve, supply_qty):
+    """Latest date whose full-day cumulative demand is <= supply_qty (i.e. fully paid off),
+    or None if supply_qty doesn't even cover the earliest date's full-day total. Meant to be
+    evaluated with the running supply as of *after* a given lot is added, so the lot is
+    labeled with the furthest date its addition genuinely finishes covering."""
+    result = None
     for d, cum_qty in cumulative_curve:
-        if cum_qty > supply_qty:
-            return d
-    return None
+        if cum_qty <= supply_qty:
+            result = d
+        else:
+            break
+    return result
 
 
 def get_demand(loading_path, date_start, date_end, kpcs_threshold):
@@ -355,10 +357,10 @@ def build_report(loading_path, planning_path, anode_path, date_start, date_end,
         part_lots = sorted(lots.get(anode_code, []), key=lambda entry: entry[7] or date.min)
         running_supply = planned_qty
         for lot_number, code, powder_type, plan_date, qty, waybill, subinventory, wb_date in part_lots:
-            covered_through = next_uncovered_date(cumulative_curve, running_supply)
             running_supply += qty
+            covered_through = covered_through_date(cumulative_curve, running_supply)
             detail_rows.append({
-                "covered_through_date": covered_through,
+                "covered_through_date": covered_through if covered_through is not None else "不够",
                 "category": category_by_part.get(part),
                 "total_cycle": total_cycle_by_part.get(part),
                 "elect_type": elect_type_by_part.get(part),
