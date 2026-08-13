@@ -193,13 +193,15 @@ def get_demand(loading_path, date_start, date_end, kpcs_threshold):
             anode_code_by_part[part] = row[anode_i]
         if category_by_part.get(part) is None and row[category_i]:
             category_by_part[part] = row[category_i]
-        if total_cycle_by_part.get(part) is None and row[total_cycle_i] is not None:
+        if total_cycle_by_part.get(part) is None and isinstance(row[total_cycle_i], (int, float)):
             total_cycle_by_part[part] = row[total_cycle_i]
         if elect_type_by_part.get(part) is None and row[elect_type_i]:
             elect_type_by_part[part] = row[elect_type_i]
 
         row_date = _to_date(row[date_i])
         kpcs = row[kpcs_i]
+        if not isinstance(kpcs, (int, float)):
+            kpcs = None
         if row_date is None or kpcs is None or not (kpcs > kpcs_threshold):
             continue
 
