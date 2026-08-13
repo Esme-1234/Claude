@@ -8,6 +8,9 @@ Pipeline
    - column F  (Actual Start Qty)-> quantity needed for that demand row
    - column E  (SUGG_START_DATE) -> demand date, filtered to a configurable window
    - column AE (Kpcs/Cycles)     -> filtered against a configurable threshold
+                                    (--kpcs-threshold by default, or a
+                                    per-Anode-Category override via
+                                    --category-threshold)
    - column C  (Anode)           -> the anode/component code for that part number
    Rows that pass the date-window and AE-threshold filters are summed per part
    number to get RequiredQty.
@@ -48,6 +51,7 @@ Usage
         --output shortage_with_anode_report.xlsx \
         --date-start 2026-08-06 --months 1 \
         --kpcs-threshold 6 \
+        --category-threshold "T521X=5" --category-threshold "T59D 1=7" \
         --anode-cutoff-date 2026-07-27
 """
 
@@ -173,8 +177,14 @@ def next_uncovered_date(cumulative_curve, supply_qty):
     return None
 
 
-def get_demand(loading_path, date_start, date_end, kpcs_threshold):
-    """Return (required_qty_by_part, anode_code_by_part)."""
+def get_demand(loading_path, date_start, date_end, kpcs_threshold, category_thresholds=None):
+    """Return (required_qty_by_part, anode_code_by_part).
+
+    category_thresholds: optional {Anode Category: threshold} overrides. A demand row's own
+    Anode Category (column A) is looked up there first; kpcs_threshold is the fallback for
+    any category not listed.
+    """
+    category_thresholds = category_thresholds or {}
     wb = openpyxl.load_workbook(loading_path, read_only=True, data_only=True)
     ws = wb[LOADING_SHEET]
 
@@ -213,7 +223,8 @@ def get_demand(loading_path, date_start, date_end, kpcs_threshold):
         kpcs = row[kpcs_i]
         if not isinstance(kpcs, (int, float)):
             kpcs = None
-        if row_date is None or kpcs is None or not (kpcs > kpcs_threshold):
+        effective_threshold = category_thresholds.get(row[category_i], kpcs_threshold)
+        if row_date is None or kpcs is None or not (kpcs > effective_threshold):
             continue
 
         qty = row[qty_i] or 0
@@ -326,10 +337,10 @@ def get_available_anode(anode_path, anode_codes_needed, anode_cutoff_date, used_
 
 
 def build_report(loading_path, planning_path, anode_path, date_start, date_end,
-                  kpcs_threshold, anode_cutoff_date, cutoff_inclusive=False):
+                  kpcs_threshold, anode_cutoff_date, cutoff_inclusive=False, category_thresholds=None):
     (required, anode_code_by_part, category_by_part, total_cycle_by_part, elect_type_by_part,
      demand_rows_by_part, full_demand_rows_by_part) = get_demand(
-        loading_path, date_start, date_end, kpcs_threshold)
+        loading_path, date_start, date_end, kpcs_threshold, category_thresholds)
     planned, used_lot_ids = get_planned(planning_path)
 
     shortages = {}
@@ -478,7 +489,12 @@ def main():
 
     parser.add_argument("--kpcs-threshold", type=float, default=6.0,
                          help="AE column (Kpcs/Cycles) must be strictly greater than this value "
-                              "for a demand row to count (default: 6).")
+                              "for a demand row to count (default: 6). Used for any Anode Category "
+                              "not given its own --category-threshold override.")
+    parser.add_argument("--category-threshold", action="append", default=[], metavar="CATEGORY=VALUE",
+                         help="Per-category AE threshold override, e.g. --category-threshold \"T521X=5\". "
+                              "Repeat for multiple categories (quote categories containing spaces, e.g. "
+                              "\"T59D 1=7\"). Overrides --kpcs-threshold for that category only.")
 
     parser.add_argument("--anode-cutoff-date", default="2026-07-27",
                          help="An 'Intransit' anode lot is usable only if its WAYBILL date "
@@ -498,10 +514,21 @@ def main():
 
     anode_cutoff_date = _to_date(args.anode_cutoff_date)
 
+    category_thresholds = {}
+    for entry in args.category_threshold:
+        if "=" not in entry:
+            parser.error(f"--category-threshold must be CATEGORY=VALUE, got: {entry!r}")
+        category, _, value = entry.partition("=")
+        category = category.strip()
+        try:
+            category_thresholds[category] = float(value)
+        except ValueError:
+            parser.error(f"--category-threshold value must be a number, got: {entry!r}")
+
     summary_rows, detail_rows = build_report(
         args.loading, args.planning_result, args.anode,
         date_start, date_end, args.kpcs_threshold, anode_cutoff_date,
-        args.anode_cutoff_inclusive,
+        args.anode_cutoff_inclusive, category_thresholds,
     )
 
     params = {
@@ -510,7 +537,9 @@ def main():
         "anode_file": args.anode,
         "demand_date_start": date_start,
         "demand_date_end": date_end,
-        "kpcs_threshold (AE column, strictly greater than)": args.kpcs_threshold,
+        "kpcs_threshold (AE column, strictly greater than, default for unlisted categories)": args.kpcs_threshold,
+        "category_thresholds (AE, strictly greater than, per Anode Category)":
+            ", ".join(f"{c}={v}" for c, v in category_thresholds.items()) or "(none)",
         "anode_cutoff_date (Intransit WAYBILL date, {} cutoff)".format(
             "on or before" if args.anode_cutoff_inclusive else "strictly before"): anode_cutoff_date,
     }
