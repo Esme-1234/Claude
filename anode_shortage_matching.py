@@ -392,10 +392,14 @@ def build_report(loading_path, planning_path, anode_path, date_start, date_end,
             running_supply += qty
             if target_date is None:
                 covered_display = "不够"
-            elif cumulative_by_date[target_date] <= final_supply:
-                covered_display = target_date
-            else:
+            elif cumulative_by_date[target_date] > final_supply:
                 covered_display = f"{target_date}不够"
+            elif next_uncovered_date(cumulative_curve, running_supply) is None:
+                # This lot's own contribution doesn't just close its immediate target -
+                # it also finishes off every later date in the part's whole backlog.
+                covered_display = f"{target_date}-all"
+            else:
+                covered_display = target_date
             detail_rows.append({
                 "covered_through_date": covered_display,
                 "category": category_by_part.get(part),
