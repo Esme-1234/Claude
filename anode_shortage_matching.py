@@ -336,6 +336,13 @@ def get_available_anode(anode_path, anode_codes_needed, anode_cutoff_date, used_
     return available, lots
 
 
+def matches_63_75_pattern(part_number):
+    """True if characters 11-12 (1-indexed) of the part number are '63' or '75'."""
+    if not part_number or len(part_number) < 12:
+        return False
+    return part_number[10:12] in ("63", "75")
+
+
 def build_report(loading_path, planning_path, anode_path, date_start, date_end,
                   kpcs_threshold, anode_cutoff_date, cutoff_inclusive=False, category_thresholds=None):
     (required, anode_code_by_part, category_by_part, total_cycle_by_part, elect_type_by_part,
@@ -356,10 +363,42 @@ def build_report(loading_path, planning_path, anode_path, date_start, date_end,
 
     summary_rows = []
     detail_rows = []
+    excluded_rows = []
     for part, (req_qty, planned_qty, shortage_qty) in shortages.items():
         anode_code = anode_code_by_part.get(part)
-        available_qty = available.get(anode_code, 0) if anode_code else 0
-        if not anode_code or available_qty <= 0:
+        if not anode_code:
+            continue
+
+        part_lots = sorted(lots.get(anode_code, []), key=lambda entry: entry[7] or date.min)
+
+        if matches_63_75_pattern(part):
+            # For these part numbers, ANODE-INSP and Intransit lots don't count as usable -
+            # only ANODE-KO does. Pull them out into a separate log instead of the normal
+            # detail listing.
+            kept_lots = []
+            for entry in part_lots:
+                subinventory = entry[6]
+                if subinventory in ("ANODE-INSP", "Intransit"):
+                    excluded_rows.append({
+                        "category": category_by_part.get(part),
+                        "total_cycle": total_cycle_by_part.get(part),
+                        "elect_type": elect_type_by_part.get(part),
+                        "part_number": part,
+                        "anode_code": entry[1],
+                        "lot_number": entry[0],
+                        "powder_type": entry[2],
+                        "plan_date": entry[3],
+                        "qty": entry[4],
+                        "waybill": entry[5],
+                        "subinventory": subinventory,
+                        "waybill_date": entry[7],
+                    })
+                else:
+                    kept_lots.append(entry)
+            part_lots = kept_lots
+
+        available_qty = sum(entry[4] for entry in part_lots)
+        if available_qty <= 0:
             continue  # no anode available for this shortage -> excluded per requirement
 
         summary_rows.append({
@@ -369,13 +408,12 @@ def build_report(loading_path, planning_path, anode_path, date_start, date_end,
             "planned_qty": planned_qty,
             "shortage_qty": shortage_qty,
             "available_anode_qty": available_qty,
-            "available_lot_count": len(lots.get(anode_code, [])),
+            "available_lot_count": len(part_lots),
             "anode_covers_shortage": available_qty >= shortage_qty,
         })
 
         cumulative_curve = build_cumulative_demand(full_demand_rows_by_part.get(part, []))
         cumulative_by_date = dict(cumulative_curve)
-        part_lots = sorted(lots.get(anode_code, []), key=lambda entry: entry[7] or date.min)
 
         # Pass 1: figure out the total supply this part ends up with (planned + every
         # available lot), so we know whether a given target date ever actually gets closed.
@@ -423,10 +461,10 @@ def build_report(loading_path, planning_path, anode_path, date_start, date_end,
                 break
 
     summary_rows.sort(key=lambda r: r["shortage_qty"], reverse=True)
-    return summary_rows, detail_rows
+    return summary_rows, detail_rows, excluded_rows
 
 
-def save(summary_rows, detail_rows, params, output_path):
+def save(summary_rows, detail_rows, excluded_rows, params, output_path):
     wb = openpyxl.Workbook()
 
     ws = wb.active
@@ -474,6 +512,19 @@ def save(summary_rows, detail_rows, params, output_path):
     for row_idx in range(1, ws_detail.max_row + 1):
         for col in "NOPQ":
             ws_detail[f"{col}{row_idx}"].fill = mirror_fill
+
+    ws_excluded = wb.create_sheet("Excluded_63or75_INSP_Intransit")
+    ws_excluded.append(["Category", "TotalCycle", "ElectType", "PartNumber", "AnodeCode", "LotNumber",
+                         "PowderType", "PlanDate", "QTY", "WAYBILL", "SUBINVENTORY", "WaybillDate"])
+    for r in excluded_rows:
+        ws_excluded.append([r["category"], r["total_cycle"], r["elect_type"], r["part_number"],
+                             r["anode_code"], r["lot_number"], r["powder_type"], r["plan_date"], r["qty"],
+                             r["waybill"], r["subinventory"], r["waybill_date"]])
+    for col, width in zip("ABCDEFGHIJKL", (14, 12, 12, 26, 22, 16, 12, 12, 12, 16, 16, 14)):
+        ws_excluded.column_dimensions[col].width = width
+    for row_idx in range(2, ws_excluded.max_row + 1):
+        ws_excluded[f"H{row_idx}"].number_format = "yyyy-mm-dd"
+        ws_excluded[f"L{row_idx}"].number_format = "yyyy-mm-dd"
 
     ws_params = wb.create_sheet("Parameters")
     ws_params.append(["Parameter", "Value"])
@@ -543,7 +594,7 @@ def main():
         except ValueError:
             parser.error(f"--category-threshold value must be a number, got: {entry!r}")
 
-    summary_rows, detail_rows = build_report(
+    summary_rows, detail_rows, excluded_rows = build_report(
         args.loading, args.planning_result, args.anode,
         date_start, date_end, args.kpcs_threshold, anode_cutoff_date,
         args.anode_cutoff_inclusive, category_thresholds,
@@ -561,7 +612,7 @@ def main():
         "anode_cutoff_date (Intransit WAYBILL date, {} cutoff)".format(
             "on or before" if args.anode_cutoff_inclusive else "strictly before"): anode_cutoff_date,
     }
-    save(summary_rows, detail_rows, params, args.output)
+    save(summary_rows, detail_rows, excluded_rows, params, args.output)
 
     print(f"{len(summary_rows)} part numbers are short on planned quantity AND have usable anode "
           f"-> {args.output}")
