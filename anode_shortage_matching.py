@@ -374,20 +374,28 @@ def build_report(loading_path, planning_path, anode_path, date_start, date_end,
         })
 
         cumulative_curve = build_cumulative_demand(full_demand_rows_by_part.get(part, []))
+        cumulative_by_date = dict(cumulative_curve)
         part_lots = sorted(lots.get(anode_code, []), key=lambda entry: entry[7] or date.min)
+
+        # Pass 1: figure out the total supply this part ends up with (planned + every
+        # available lot), so we know whether a given target date ever actually gets closed.
+        final_supply = planned_qty + sum(entry[4] for entry in part_lots)
+
+        # Pass 2: label each lot with the date whose order it is being applied toward -
+        # the earliest not-yet-closed date as of *before* this lot is added. A lot that
+        # overshoots its target and also closes later dates isn't split up; the next lot
+        # simply starts on whichever date is still open. If the target date never gets
+        # fully paid off even after every available lot, flag it "不够".
         running_supply = planned_qty
         for lot_number, code, powder_type, plan_date, qty, waybill, subinventory, wb_date in part_lots:
+            target_date = next_uncovered_date(cumulative_curve, running_supply)
             running_supply += qty
-            covered_through = covered_through_date(cumulative_curve, running_supply)
-            if covered_through is not None:
-                # Show the furthest date this lot's addition genuinely finishes covering
-                # (implicitly covers every earlier date too, e.g. 2026-09-14 also means
-                # 2026-09-06 is done).
-                covered_display = covered_through
+            if target_date is None:
+                covered_display = "不够"
+            elif cumulative_by_date[target_date] <= final_supply:
+                covered_display = target_date
             else:
-                # Doesn't finish off any date yet -> name the still-unmet one.
-                still_short_date = next_uncovered_date(cumulative_curve, running_supply)
-                covered_display = f"{still_short_date}不够" if still_short_date else "不够"
+                covered_display = f"{target_date}不够"
             detail_rows.append({
                 "covered_through_date": covered_display,
                 "category": category_by_part.get(part),
