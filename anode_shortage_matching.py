@@ -390,6 +390,7 @@ def build_report(loading_path, planning_path, anode_path, date_start, date_end,
         for lot_number, code, powder_type, plan_date, qty, waybill, subinventory, wb_date in part_lots:
             target_date = next_uncovered_date(cumulative_curve, running_supply)
             running_supply += qty
+            everything_covered = False
             if target_date is None:
                 covered_display = "不够"
             elif cumulative_by_date[target_date] > final_supply:
@@ -398,6 +399,7 @@ def build_report(loading_path, planning_path, anode_path, date_start, date_end,
                 # This lot's own contribution doesn't just close its immediate target -
                 # it also finishes off every later date in the part's whole backlog.
                 covered_display = f"{target_date}-all"
+                everything_covered = True
             else:
                 covered_display = target_date
             detail_rows.append({
@@ -415,6 +417,10 @@ def build_report(loading_path, planning_path, anode_path, date_start, date_end,
                 "subinventory": subinventory,
                 "waybill_date": wb_date,
             })
+            if everything_covered:
+                # Every remaining lot for this part is unneeded surplus -> stop here
+                # instead of listing them as misleadingly "不够".
+                break
 
     summary_rows.sort(key=lambda r: r["shortage_qty"], reverse=True)
     return summary_rows, detail_rows
