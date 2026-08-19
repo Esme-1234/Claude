@@ -98,15 +98,21 @@ def get_categories(mapping_path, sheet_name="Anode_Tantalum_Mapping"):
     wb = openpyxl.load_workbook(mapping_path, read_only=True, data_only=True)
     ws = wb[sheet_name]
     header_row, header = _find_header_row(ws, "COMP_ITEM", max_scan_rows=15)
+    parent_col = header.index("PARENT_ITEM")
     comp_col = header.index("COMP_ITEM")
     cat_col = header.index("Category")
 
-    categories = {}
+    # A target partNumber can appear as either COMP_ITEM (the usual case) or,
+    # for some lot-suffixed numbers, only as PARENT_ITEM. Fall back to
+    # PARENT_ITEM only when COMP_ITEM has no entry for that key.
+    by_parent, by_comp = {}, {}
     for row in ws.iter_rows(min_row=header_row + 1, values_only=True):
-        comp = row[comp_col]
-        if comp and comp not in categories:
-            categories[comp] = row[cat_col]
-    return categories
+        parent, comp, cat = row[parent_col], row[comp_col], row[cat_col]
+        if parent and parent not in by_parent:
+            by_parent[parent] = cat
+        if comp and comp not in by_comp:
+            by_comp[comp] = cat
+    return {**by_parent, **by_comp}
 
 
 def build_report(warning_path, loading_path, planning_result_path, category_mapping_path):
