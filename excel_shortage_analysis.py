@@ -1,5 +1,5 @@
 """
-Build a shortage report from three planning Excel files:
+Build a shortage report from four planning Excel files:
 
 1. planningWarningMessage.xlsx - Sheet1 has one row per planning warning.
    Rows whose warningMessage starts with "CalculatedStartDate" identify the
@@ -10,6 +10,9 @@ Build a shortage report from three planning Excel files:
 3. PlanningResult.xlsx - Sheet1 has one row per planned lot (partNumber,
    planDate, quantity). matchedQty is the sum of quantity over every row
    whose partNumber matches - the total already covered by planning.
+4. Anode *.xlsx - "Anode_Tantalum_Mapping" sheet maps COMP_ITEM to a
+   Category. COMP_ITEM lines up with partNumber, so this gives the
+   category to show for each target partNumber.
 
 For every target partNumber: gap = matchedQty - requiredQty. A negative gap
 means planning hasn't covered the requirement yet (a shortage). The output
@@ -21,6 +24,7 @@ Usage:
         --warning "planningWarningMessage (2).xlsx" \
         --loading "Loading July.8th-New.xlsx" \
         --planning-result "PlanningResult (7).xlsx" \
+        --category-mapping "Anode 3-4-8.19.xlsx" \
         --output shortage_report.xlsx
 """
 
@@ -90,22 +94,38 @@ def get_matched_quantities(planning_result_path, sheet_name=None):
     return matched
 
 
-def build_report(warning_path, loading_path, planning_result_path):
+def get_categories(mapping_path, sheet_name="Anode_Tantalum_Mapping"):
+    wb = openpyxl.load_workbook(mapping_path, read_only=True, data_only=True)
+    ws = wb[sheet_name]
+    header_row, header = _find_header_row(ws, "COMP_ITEM", max_scan_rows=15)
+    comp_col = header.index("COMP_ITEM")
+    cat_col = header.index("Category")
+
+    categories = {}
+    for row in ws.iter_rows(min_row=header_row + 1, values_only=True):
+        comp = row[comp_col]
+        if comp and comp not in categories:
+            categories[comp] = row[cat_col]
+    return categories
+
+
+def build_report(warning_path, loading_path, planning_result_path, category_mapping_path):
     part_numbers = get_target_part_numbers(warning_path)
     required, week_label = get_required_quantities(loading_path)
     matched = get_matched_quantities(planning_result_path)
+    categories = get_categories(category_mapping_path)
 
     rows = []
     for pn in part_numbers:
         req = required.get(pn, 0)
         mat = matched.get(pn, 0)
-        rows.append((pn, req, mat, mat - req))
+        rows.append((categories.get(pn, ""), pn, req, mat, mat - req))
     return rows, week_label
 
 
 def save(rows, week_label, output_path):
     wb = openpyxl.Workbook()
-    header = ["partNumber", week_label, "matchedQty", "gap"]
+    header = ["category", "partNumber", week_label, "matchedQty", "gap"]
 
     ws_all = wb.active
     ws_all.title = "AllPartNumbers"
@@ -116,14 +136,14 @@ def save(rows, week_label, output_path):
     ws_short = wb.create_sheet("ShortageOnly")
     ws_short.append(header)
     for row in rows:
-        if row[3] < 0:
+        if row[4] < 0:
             ws_short.append(list(row))
 
     for ws in (ws_all, ws_short):
-        for col, width in zip("ABCD", (28, 14, 14, 16)):
+        for col, width in zip("ABCDE", (14, 28, 14, 14, 16)):
             ws.column_dimensions[col].width = width
         for row in range(2, ws.max_row + 1):
-            for col in "BCD":
+            for col in "CDE":
                 ws[f"{col}{row}"].number_format = "#,##0;(#,##0)"
 
     wb.save(output_path)
@@ -134,13 +154,14 @@ def main():
     parser.add_argument("--warning", required=True, help="Path to the planningWarningMessage .xlsx file")
     parser.add_argument("--loading", required=True, help="Path to the Loading .xlsx file (Summary sheet)")
     parser.add_argument("--planning-result", required=True, help="Path to the PlanningResult .xlsx file")
+    parser.add_argument("--category-mapping", required=True, help="Path to the Anode .xlsx file (Anode_Tantalum_Mapping sheet)")
     parser.add_argument("--output", required=True, help="Path to write the shortage report .xlsx file")
     args = parser.parse_args()
 
-    rows, week_label = build_report(args.warning, args.loading, args.planning_result)
+    rows, week_label = build_report(args.warning, args.loading, args.planning_result, args.category_mapping)
     save(rows, week_label, args.output)
 
-    shortage_count = sum(1 for r in rows if r[3] < 0)
+    shortage_count = sum(1 for r in rows if r[4] < 0)
     print(f"{len(rows)} target partNumbers, {shortage_count} with a shortage -> {args.output}")
 
 
