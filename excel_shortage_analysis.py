@@ -11,6 +11,9 @@ Build a shortage report from three planning Excel files:
    - "KEMET_GOP_ATO_ANALYSIS_DAILY" has a PARENT_ITEM column and an
      "Anode Category" column; this gives the category for each
      partNumber.
+   - "Overall TPT" has an ItemName column and an adjusted_tpt column;
+     Actual TPT is the average adjusted_tpt over every row whose
+     ItemName matches a partNumber.
 3. PlanningResult.xlsx - Sheet1 has one row per planned lot (partNumber,
    planDate, quantity). matchedQty is the sum of quantity over every row
    whose partNumber matches - the total already covered by planning.
@@ -109,23 +112,41 @@ def get_categories(loading_path, sheet_name="KEMET_GOP_ATO_ANALYSIS_DAILY"):
     return categories
 
 
+def get_actual_tpt(loading_path, sheet_name="Overall TPT"):
+    wb = openpyxl.load_workbook(loading_path, read_only=True, data_only=True)
+    ws = wb[sheet_name]
+    header_row, header = _find_header_row(ws, "ItemName", max_scan_rows=15)
+    item_col = header.index("ItemName")
+    tpt_col = header.index("adjusted_tpt")
+
+    sums = defaultdict(float)
+    counts = defaultdict(int)
+    for row in ws.iter_rows(min_row=header_row + 1, values_only=True):
+        item, tpt = row[item_col], row[tpt_col]
+        if item and tpt is not None:
+            sums[item] += tpt
+            counts[item] += 1
+    return {item: sums[item] / count for item, count in counts.items()}
+
+
 def build_report(warning_path, loading_path, planning_result_path):
     part_numbers = get_target_part_numbers(warning_path)
     required, week_label = get_required_quantities(loading_path)
     matched = get_matched_quantities(planning_result_path)
     categories = get_categories(loading_path)
+    actual_tpt = get_actual_tpt(loading_path)
 
     rows = []
     for pn in part_numbers:
         req = required.get(pn, 0)
         mat = matched.get(pn, 0)
-        rows.append((categories.get(pn, ""), pn, req, mat, mat - req))
+        rows.append((categories.get(pn, ""), pn, req, mat, mat - req, actual_tpt.get(pn)))
     return rows, week_label
 
 
 def save(rows, week_label, output_path):
     wb = openpyxl.Workbook()
-    header = ["category", "partNumber", week_label, "matchedQty", "gap"]
+    header = ["category", "partNumber", week_label, "matchedQty", "gap", "Actual TPT"]
 
     ws_all = wb.active
     ws_all.title = "AllPartNumbers"
@@ -140,11 +161,12 @@ def save(rows, week_label, output_path):
             ws_short.append(list(row))
 
     for ws in (ws_all, ws_short):
-        for col, width in zip("ABCDE", (14, 28, 14, 14, 16)):
+        for col, width in zip("ABCDEF", (14, 28, 14, 14, 16, 12)):
             ws.column_dimensions[col].width = width
         for row in range(2, ws.max_row + 1):
             for col in "CDE":
                 ws[f"{col}{row}"].number_format = "#,##0;(#,##0)"
+            ws[f"F{row}"].number_format = "0.00"
 
     wb.save(output_path)
 
