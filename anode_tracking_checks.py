@@ -13,9 +13,9 @@ the "Details" tab of an Anode Tracking Report workbook:
                                                         flagged if total qty > 250,000
                                                         (width is not part of the match)
   5. duplicate anodeLotID within the report         -> list rows
-  6. anodeLotID also present, with a blank PlanDate,
-     in the master "Anode 3-4-8.19.xlsx" workbook's
-     "details" sheet (LOT_NUMBER column)             -> list rows
+  6. anodeLotID also present, with a non-blank
+     PlanDate, in the master "Anode 3-4-8.19.xlsx"
+     workbook's "details" sheet (LOT_NUMBER column)   -> list rows
      (a trailing letter on the anodeLotID is
      stripped before matching, and the match is by
      substring containment rather than exact equality)
@@ -66,8 +66,8 @@ def load_rows(path, sheet_name=SHEET_NAME):
     return rows
 
 
-def load_master_blank_plandate_lots(path, sheet_name=MASTER_SHEET_NAME):
-    """LOT_NUMBER values from the master workbook's rows where PlanDate is blank."""
+def load_master_planned_lots(path, sheet_name=MASTER_SHEET_NAME):
+    """LOT_NUMBER values from the master workbook's rows where PlanDate is NOT blank."""
     wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
     ws = wb[sheet_name]
     rows_iter = ws.iter_rows(values_only=True)
@@ -77,7 +77,7 @@ def load_master_blank_plandate_lots(path, sheet_name=MASTER_SHEET_NAME):
     lots = []
     for r in rows_iter:
         plan_date = r[date_idx]
-        if is_blank(plan_date):
+        if not is_blank(plan_date):
             lot = r[lot_idx]
             if lot:
                 lots.append(lot)
@@ -245,19 +245,19 @@ def main():
     args = parser.parse_args()
 
     current_rows = load_rows(args.current, args.sheet)
-    master_lots = load_master_blank_plandate_lots(args.master, args.master_sheet)
+    master_lots = load_master_planned_lots(args.master, args.master_sheet)
 
     build_report(current_rows, master_lots, args.output)
 
     print(f"Loaded {len(current_rows)} rows from '{args.current}' ({args.sheet}).")
-    print(f"Loaded {len(master_lots)} blank-PlanDate LOT_NUMBERs from '{args.master}' ({args.master_sheet}).")
+    print(f"Loaded {len(master_lots)} non-blank-PlanDate LOT_NUMBERs from '{args.master}' ({args.master_sheet}).")
     print(f"1. Blank powderName: {len(check_blank_powder_name(current_rows))}")
     print(f"2. Quantity < {QTY_THRESHOLD}: {len(check_low_quantity(current_rows))}")
     print(f"3. Category B & partNumber 76xx: {len(check_category_b_partnumber_76(current_rows))}")
     print(f"4. Target dimension rows: {len(check_target_dimensions(current_rows))}")
     dup = check_duplicate_lot_ids(current_rows)
     print(f"5. Duplicate LotIDs: {len(dup)} lot(s), {sum(len(v) for v in dup.values())} row(s)")
-    print(f"6. LotIDs also blank-PlanDate in master: {len(check_cross_file_duplicate_lot_ids(current_rows, master_lots))}")
+    print(f"6. LotIDs also planned (non-blank PlanDate) in master: {len(check_cross_file_duplicate_lot_ids(current_rows, master_lots))}")
     print(f"7. C[11:12] in 75/63 & subInventory Intransit/ANODE-INSP: {len(check_c_pos12_status(current_rows))}")
     print(f"Report written to '{args.output}'.")
 
