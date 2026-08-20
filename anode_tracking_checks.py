@@ -22,6 +22,8 @@ the "Details" tab of an Anode Tracking Report workbook:
   7. component column, characters 11-12 == '75' or
      '63', and subInventory is Intransit or
      ANODE-INSP                                     -> list rows
+  8. category == 'B' and width/length/thickness/
+     wiresize == 0.09 / 0.07 / 0.041 / 0.0193        -> daily count/list summary
 
 Results are written to a multi-sheet Excel report.
 """
@@ -38,6 +40,7 @@ SHEET_NAME = "Details"
 MASTER_SHEET_NAME = "details"
 QTY_THRESHOLD = 4000
 TARGET_DIMS = {"length": 0.054, "thickness": 0.041, "wiresize": 0.0118}
+TARGET_DIMS_CAT_B = {"width": 0.09, "length": 0.07, "thickness": 0.041, "wiresize": 0.0193}
 DAILY_QTY_LIMIT = 250_000
 FLAGGED_C_CODES = {"75", "63"}
 FLAGGED_SUBINVENTORY = {"Intransit", "ANODE-INSP"}
@@ -116,6 +119,16 @@ def check_category_b_partnumber_76(rows):
 def check_target_dimensions(rows, dims=TARGET_DIMS, tol=1e-6):
     out = []
     for r in rows:
+        if all(r.get(k) is not None and abs(r[k] - v) < tol for k, v in dims.items()):
+            out.append(r)
+    return out
+
+
+def check_category_b_dims(rows, dims=TARGET_DIMS_CAT_B, tol=1e-6):
+    out = []
+    for r in rows:
+        if r.get("category") != "B":
+            continue
         if all(r.get(k) is not None and abs(r[k] - v) < tol for k, v in dims.items()):
             out.append(r)
     return out
@@ -232,6 +245,9 @@ def build_report(current_rows, master_lots, output_path):
     )
     write_detail_sheet(wb, "7_C12_IntransitOrInsp", check_c_pos12_status(current_rows))
 
+    cat_b_dims = check_category_b_dims(current_rows)
+    write_daily_summary_sheets(wb, "8_CatB_Dims", daily_summary(cat_b_dims))
+
     wb.save(output_path)
 
 
@@ -259,6 +275,7 @@ def main():
     print(f"5. Duplicate LotIDs: {len(dup)} lot(s), {sum(len(v) for v in dup.values())} row(s)")
     print(f"6. LotIDs also planned (non-blank PlanDate) in master: {len(check_cross_file_duplicate_lot_ids(current_rows, master_lots))}")
     print(f"7. C[11:12] in 75/63 & subInventory Intransit/ANODE-INSP: {len(check_c_pos12_status(current_rows))}")
+    print(f"8. Category B & target dims (0.09/0.07/0.041/0.0193): {len(check_category_b_dims(current_rows))}")
     print(f"Report written to '{args.output}'.")
 
 
