@@ -13,10 +13,12 @@ the "Details" tab of an Anode Tracking Report workbook:
                                                         flagged if total qty > 250,000
                                                         (width is not part of the match)
   5. duplicate anodeLotID within the report         -> list rows
-  6. anodeLotID also present in a prior report      -> list rows
-     (skip LotIDs whose row in the prior report is
-     manually highlighted blue / Accent1 theme fill,
-     which marks it as already reviewed)
+  6. anodeLotID also present, with a blank PlanDate,
+     in the master "Anode 3-4-8.19.xlsx" workbook's
+     "details" sheet (LOT_NUMBER column)             -> list rows
+     (a trailing letter on the anodeLotID is
+     stripped before matching, and the match is by
+     substring containment rather than exact equality)
   7. component column, characters 11-12 == '75' or
      '63', and subInventory is Intransit or
      ANODE-INSP                                     -> list rows
@@ -33,12 +35,12 @@ from openpyxl.styles import PatternFill
 from openpyxl.utils import get_column_letter
 
 SHEET_NAME = "Details"
+MASTER_SHEET_NAME = "details"
 QTY_THRESHOLD = 4000
 TARGET_DIMS = {"length": 0.054, "thickness": 0.041, "wiresize": 0.0118}
 DAILY_QTY_LIMIT = 250_000
 FLAGGED_C_CODES = {"75", "63"}
 FLAGGED_SUBINVENTORY = {"Intransit", "ANODE-INSP"}
-REVIEWED_HIGHLIGHT_THEME = 4  # Accent1 (blue): row manually marked "already reviewed"
 
 EXCEEDS_250K_FILL = PatternFill(start_color="FF92D050", end_color="FF92D050", fill_type="solid")
 
@@ -64,22 +66,22 @@ def load_rows(path, sheet_name=SHEET_NAME):
     return rows
 
 
-def get_reviewed_lot_ids(path, sheet_name=SHEET_NAME, theme=REVIEWED_HIGHLIGHT_THEME):
-    """LotIDs whose row is manually highlighted blue (Accent1 theme fill),
-    marking them as already reviewed / not a real duplicate."""
-    wb = openpyxl.load_workbook(path, data_only=True)
+def load_master_blank_plandate_lots(path, sheet_name=MASTER_SHEET_NAME):
+    """LOT_NUMBER values from the master workbook's rows where PlanDate is blank."""
+    wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
     ws = wb[sheet_name]
-    headers = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
-    lot_col = headers.index("anodeLotID")
-    reviewed = set()
-    for row in ws.iter_rows(min_row=2):
-        cell = row[lot_col]
-        if cell.value is None:
-            continue
-        f = cell.fill
-        if f.patternType == "solid" and f.fgColor and f.fgColor.type == "theme" and f.fgColor.theme == theme:
-            reviewed.add(cell.value)
-    return reviewed
+    rows_iter = ws.iter_rows(values_only=True)
+    headers = next(rows_iter)
+    lot_idx = headers.index("LOT_NUMBER")
+    date_idx = headers.index("PlanDate")
+    lots = []
+    for r in rows_iter:
+        plan_date = r[date_idx]
+        if is_blank(plan_date):
+            lot = r[lot_idx]
+            if lot:
+                lots.append(lot)
+    return lots
 
 
 def is_blank(value):
@@ -128,10 +130,23 @@ def check_duplicate_lot_ids(rows):
     return {lot: items for lot, items in seen.items() if len(items) > 1}
 
 
-def check_cross_file_duplicate_lot_ids(rows_current, rows_previous, reviewed_lot_ids=frozenset()):
-    lots_previous = {r.get("anodeLotID") for r in rows_previous if r.get("anodeLotID")}
-    lots_previous -= reviewed_lot_ids
-    return [r for r in rows_current if r.get("anodeLotID") in lots_previous]
+def strip_trailing_letter(lot_id):
+    if isinstance(lot_id, str) and lot_id and lot_id[-1].isalpha():
+        return lot_id[:-1]
+    return lot_id
+
+
+def check_cross_file_duplicate_lot_ids(rows_current, master_lots):
+    master_lots = [m for m in master_lots if isinstance(m, str)]
+    out = []
+    for r in rows_current:
+        lot = r.get("anodeLotID")
+        if not lot:
+            continue
+        norm = strip_trailing_letter(lot)
+        if any(norm in m or m in norm for m in master_lots):
+            out.append(r)
+    return out
 
 
 def check_c_pos12_status(rows):
@@ -197,7 +212,7 @@ def write_daily_summary_sheets(wb, prefix, summary):
             detail.append([s["date"]] + [r.get(c) for c in EXPORT_COLUMNS])
 
 
-def build_report(current_rows, previous_rows, output_path, reviewed_lot_ids=frozenset()):
+def build_report(current_rows, master_lots, output_path):
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
 
@@ -213,7 +228,7 @@ def build_report(current_rows, previous_rows, output_path, reviewed_lot_ids=froz
     write_duplicate_lot_sheet(wb, "5_DuplicateLotID", check_duplicate_lot_ids(current_rows))
     write_detail_sheet(
         wb, "6_CrossFileDupLotID",
-        check_cross_file_duplicate_lot_ids(current_rows, previous_rows, reviewed_lot_ids),
+        check_cross_file_duplicate_lot_ids(current_rows, master_lots),
     )
     write_detail_sheet(wb, "7_C12_IntransitOrInsp", check_c_pos12_status(current_rows))
 
@@ -222,28 +237,27 @@ def build_report(current_rows, previous_rows, output_path, reviewed_lot_ids=froz
 
 def main():
     parser = argparse.ArgumentParser(description="Run Anode Tracking Report checks.")
-    parser.add_argument("--current", default="Anode Tracking Report Jul.29th - Copy.xlsx")
-    parser.add_argument("--previous", default="Anode Tracking Report Jul.27th.xlsx")
+    parser.add_argument("--current", default="Anode Tracking Report Aug.19th.xlsx")
+    parser.add_argument("--master", default="Anode 3-4-8.19.xlsx")
     parser.add_argument("--output", default="Anode_Tracking_Check_Report.xlsx")
     parser.add_argument("--sheet", default=SHEET_NAME)
+    parser.add_argument("--master-sheet", default=MASTER_SHEET_NAME)
     args = parser.parse_args()
 
     current_rows = load_rows(args.current, args.sheet)
-    previous_rows = load_rows(args.previous, args.sheet)
-    reviewed_lot_ids = get_reviewed_lot_ids(args.previous, args.sheet)
+    master_lots = load_master_blank_plandate_lots(args.master, args.master_sheet)
 
-    build_report(current_rows, previous_rows, args.output, reviewed_lot_ids)
+    build_report(current_rows, master_lots, args.output)
 
     print(f"Loaded {len(current_rows)} rows from '{args.current}' ({args.sheet}).")
-    print(f"Loaded {len(previous_rows)} rows from '{args.previous}' ({args.sheet}).")
+    print(f"Loaded {len(master_lots)} blank-PlanDate LOT_NUMBERs from '{args.master}' ({args.master_sheet}).")
     print(f"1. Blank powderName: {len(check_blank_powder_name(current_rows))}")
     print(f"2. Quantity < {QTY_THRESHOLD}: {len(check_low_quantity(current_rows))}")
     print(f"3. Category B & partNumber 76xx: {len(check_category_b_partnumber_76(current_rows))}")
     print(f"4. Target dimension rows: {len(check_target_dimensions(current_rows))}")
     dup = check_duplicate_lot_ids(current_rows)
     print(f"5. Duplicate LotIDs: {len(dup)} lot(s), {sum(len(v) for v in dup.values())} row(s)")
-    print(f"   ({len(reviewed_lot_ids)} LotID(s) marked reviewed/blue in previous report, excluded from check 6)")
-    print(f"6. LotIDs also in previous report: {len(check_cross_file_duplicate_lot_ids(current_rows, previous_rows, reviewed_lot_ids))}")
+    print(f"6. LotIDs also blank-PlanDate in master: {len(check_cross_file_duplicate_lot_ids(current_rows, master_lots))}")
     print(f"7. C[11:12] in 75/63 & subInventory Intransit/ANODE-INSP: {len(check_c_pos12_status(current_rows))}")
     print(f"Report written to '{args.output}'.")
 
