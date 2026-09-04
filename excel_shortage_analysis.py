@@ -6,8 +6,10 @@ Build a shortage report from three planning Excel files:
    partNumbers that need a shortage check.
 2. Loading *.xlsx - two sheets are used:
    - "Summary" is a pivot export keyed by PARENT_ITEM, with one column per
-     plan week (header is the week number, e.g. 202628). The first such
-     week column gives the required quantity for a partNumber.
+     plan week (header is the week number, e.g. 202628). By default the
+     first such week column gives the required quantity for a
+     partNumber; pass --weeks to sum specific week(s) instead (e.g.
+     --weeks 202634 202635 to combine WK34 and WK35 into one demand).
    - "KEMET_GOP_ATO_ANALYSIS_DAILY" has a PARENT_ITEM column and an
      "Anode Category" column; this gives the category for each
      partNumber.
@@ -28,6 +30,7 @@ Usage:
         --warning "planningWarningMessage (2).xlsx" \
         --loading "Loading July.8th-New.xlsx" \
         --planning-result "PlanningResult (7).xlsx" \
+        --weeks 202634 202635 \
         --output shortage_report.xlsx
 """
 
@@ -63,7 +66,7 @@ def get_target_part_numbers(warning_path, sheet_name=None, prefix="CalculatedSta
     return seen
 
 
-def get_required_quantities(loading_path, sheet_name="Summary"):
+def get_required_quantities(loading_path, weeks=None, sheet_name="Summary"):
     wb = openpyxl.load_workbook(loading_path, read_only=True, data_only=True)
     ws = wb[sheet_name]
     header_row, header = _find_header_row(ws, "PARENT_ITEM", max_scan_rows=10)
@@ -71,14 +74,24 @@ def get_required_quantities(loading_path, sheet_name="Summary"):
     def _looks_like_week(value):
         return isinstance(value, int) or (isinstance(value, str) and value.isdigit())
 
-    week_col = next(i for i in range(parent_col + 1, len(header)) if _looks_like_week(header[i]))
-    week_label = header[week_col]
+    week_cols = [i for i in range(parent_col + 1, len(header)) if _looks_like_week(header[i])]
+
+    if weeks:
+        wanted = {str(w) for w in weeks}
+        selected_cols = [i for i in week_cols if str(header[i]) in wanted]
+        missing = wanted - {str(header[i]) for i in selected_cols}
+        if missing:
+            raise ValueError(f"Week(s) not found in the {sheet_name} sheet: {', '.join(sorted(missing))}")
+    else:
+        selected_cols = week_cols[:1]
+
+    week_label = "+".join(str(header[i]) for i in selected_cols)
 
     required = {}
     for row in ws.iter_rows(min_row=header_row + 1, values_only=True):
         pn = row[parent_col]
         if pn:
-            required[pn] = row[week_col] or 0
+            required[pn] = sum(row[i] or 0 for i in selected_cols)
     return required, week_label
 
 
@@ -129,9 +142,9 @@ def get_actual_tpt(loading_path, sheet_name="Overall TPT"):
     return {item: sums[item] / count for item, count in counts.items()}
 
 
-def build_report(warning_path, loading_path, planning_result_path):
+def build_report(warning_path, loading_path, planning_result_path, weeks=None):
     part_numbers = get_target_part_numbers(warning_path)
-    required, week_label = get_required_quantities(loading_path)
+    required, week_label = get_required_quantities(loading_path, weeks=weeks)
     matched = get_matched_quantities(planning_result_path)
     categories = get_categories(loading_path)
     actual_tpt = get_actual_tpt(loading_path)
@@ -176,10 +189,11 @@ def main():
     parser.add_argument("--warning", required=True, help="Path to the planningWarningMessage .xlsx file")
     parser.add_argument("--loading", required=True, help="Path to the Loading .xlsx file (Summary sheet)")
     parser.add_argument("--planning-result", required=True, help="Path to the PlanningResult .xlsx file")
+    parser.add_argument("--weeks", nargs="+", help="Week column(s) in the Summary sheet to sum as the requirement (e.g. --weeks 202634 202635). Defaults to the first week column.")
     parser.add_argument("--output", required=True, help="Path to write the shortage report .xlsx file")
     args = parser.parse_args()
 
-    rows, week_label = build_report(args.warning, args.loading, args.planning_result)
+    rows, week_label = build_report(args.warning, args.loading, args.planning_result, weeks=args.weeks)
     save(rows, week_label, args.output)
 
     shortage_count = sum(1 for r in rows if r[4] < 0)
