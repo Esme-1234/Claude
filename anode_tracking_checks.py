@@ -24,6 +24,10 @@ the "Details" tab of an Anode Tracking Report workbook:
      ANODE-INSP                                     -> list rows
   8. category == 'B' and width/length/thickness/
      wiresize == 0.09 / 0.07 / 0.041 / 0.0193        -> daily count/list summary
+  9. subInventory is ANODE-SORT or Intransit        -> list rows, plus a
+                                                        waybill column looked up
+                                                        from the master workbook
+                                                        by anodeLotID
 
 Results are written to a multi-sheet Excel report.
 """
@@ -44,6 +48,7 @@ TARGET_DIMS_CAT_B = {"width": 0.09, "length": 0.07, "thickness": 0.041, "wiresiz
 DAILY_QTY_LIMIT = 250_000
 FLAGGED_C_CODES = {"75", "63"}
 FLAGGED_SUBINVENTORY = {"Intransit", "ANODE-INSP"}
+SORT_OR_INTRANSIT_SUBINVENTORY = {"ANODE-SORT", "Intransit"}
 
 EXCEEDS_250K_FILL = PatternFill(start_color="FF92D050", end_color="FF92D050", fill_type="solid")
 
@@ -85,6 +90,22 @@ def load_master_planned_lots(path, sheet_name=MASTER_SHEET_NAME):
             if lot:
                 lots.append(lot)
     return lots
+
+
+def load_master_lot_waybill_pairs(path, sheet_name=MASTER_SHEET_NAME):
+    """All (LOT_NUMBER, WAYBILL) pairs from the master workbook, for waybill lookup."""
+    wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+    ws = wb[sheet_name]
+    rows_iter = ws.iter_rows(values_only=True)
+    headers = next(rows_iter)
+    lot_idx = headers.index("LOT_NUMBER")
+    wb_idx = headers.index("WAYBILL")
+    pairs = []
+    for r in rows_iter:
+        lot = r[lot_idx]
+        if lot:
+            pairs.append((lot, r[wb_idx]))
+    return pairs
 
 
 def is_blank(value):
@@ -172,6 +193,22 @@ def check_c_pos12_status(rows):
     return out
 
 
+def check_subinventory_sort_or_intransit(rows):
+    return [r for r in rows if r.get("subInventory") in SORT_OR_INTRANSIT_SUBINVENTORY]
+
+
+def find_waybills(lot_id, master_pairs):
+    if not lot_id:
+        return None
+    norm = strip_trailing_letter(lot_id)
+    waybills = []
+    for m_lot, m_waybill in master_pairs:
+        if isinstance(m_lot, str) and (norm in m_lot or m_lot in norm):
+            if m_waybill not in (None, "") and m_waybill not in waybills:
+                waybills.append(str(m_waybill))
+    return ", ".join(waybills) if waybills else None
+
+
 def daily_summary(rows, date_field="planDate"):
     buckets = defaultdict(list)
     for r in rows:
@@ -210,6 +247,18 @@ def write_duplicate_lot_sheet(wb, title, dup_map):
     return ws
 
 
+def write_sort_or_intransit_sheet(wb, title, rows, master_pairs):
+    columns = EXPORT_COLUMNS + ["waybill"]
+    ws = wb.create_sheet(title)
+    ws.append(columns)
+    for r in rows:
+        waybill = find_waybills(r.get("anodeLotID"), master_pairs)
+        ws.append([r.get(c) for c in EXPORT_COLUMNS] + [waybill])
+    for i, col in enumerate(columns, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = max(12, len(col) + 2)
+    return ws
+
+
 def write_daily_summary_sheets(wb, prefix, summary):
     overview = wb.create_sheet(f"{prefix}_daily")
     overview.append(["date", "count", "total_quantity", "exceeds_250K"])
@@ -225,7 +274,7 @@ def write_daily_summary_sheets(wb, prefix, summary):
             detail.append([s["date"]] + [r.get(c) for c in EXPORT_COLUMNS])
 
 
-def build_report(current_rows, master_lots, output_path):
+def build_report(current_rows, master_lots, master_pairs, output_path):
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
 
@@ -248,6 +297,12 @@ def build_report(current_rows, master_lots, output_path):
     cat_b_dims = check_category_b_dims(current_rows)
     write_daily_summary_sheets(wb, "8_CatB_Dims", daily_summary(cat_b_dims))
 
+    write_sort_or_intransit_sheet(
+        wb, "9_SortOrIntransit",
+        check_subinventory_sort_or_intransit(current_rows),
+        master_pairs,
+    )
+
     wb.save(output_path)
 
 
@@ -262,8 +317,9 @@ def main():
 
     current_rows = load_rows(args.current, args.sheet)
     master_lots = load_master_planned_lots(args.master, args.master_sheet)
+    master_pairs = load_master_lot_waybill_pairs(args.master, args.master_sheet)
 
-    build_report(current_rows, master_lots, args.output)
+    build_report(current_rows, master_lots, master_pairs, args.output)
 
     print(f"Loaded {len(current_rows)} rows from '{args.current}' ({args.sheet}).")
     print(f"Loaded {len(master_lots)} non-blank-PlanDate LOT_NUMBERs from '{args.master}' ({args.master_sheet}).")
@@ -276,6 +332,7 @@ def main():
     print(f"6. LotIDs also planned (non-blank PlanDate) in master: {len(check_cross_file_duplicate_lot_ids(current_rows, master_lots))}")
     print(f"7. C[11:12] in 75/63 & subInventory Intransit/ANODE-INSP: {len(check_c_pos12_status(current_rows))}")
     print(f"8. Category B & target dims (0.09/0.07/0.041/0.0193): {len(check_category_b_dims(current_rows))}")
+    print(f"9. subInventory ANODE-SORT/Intransit: {len(check_subinventory_sort_or_intransit(current_rows))}")
     print(f"Report written to '{args.output}'.")
 
 
