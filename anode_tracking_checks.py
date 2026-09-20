@@ -25,9 +25,11 @@ the "Details" tab of an Anode Tracking Report workbook:
   8. category == 'B' and width/length/thickness/
      wiresize == 0.09 / 0.07 / 0.041 / 0.0193        -> daily count/list summary
   9. subInventory is ANODE-SORT or Intransit        -> list rows, plus a
-                                                        waybill column looked up
-                                                        from the master workbook
-                                                        by anodeLotID
+                                                        waybill and a master-
+                                                        subInventory column
+                                                        looked up from the
+                                                        master workbook by
+                                                        anodeLotID
 
 Results are written to a multi-sheet Excel report.
 """
@@ -92,20 +94,22 @@ def load_master_planned_lots(path, sheet_name=MASTER_SHEET_NAME):
     return lots
 
 
-def load_master_lot_waybill_pairs(path, sheet_name=MASTER_SHEET_NAME):
-    """All (LOT_NUMBER, WAYBILL) pairs from the master workbook, for waybill lookup."""
+def load_master_lot_details(path, sheet_name=MASTER_SHEET_NAME):
+    """All (LOT_NUMBER, WAYBILL, SUBINVENTORY) triples from the master workbook,
+    for waybill / subInventory lookup."""
     wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
     ws = wb[sheet_name]
     rows_iter = ws.iter_rows(values_only=True)
     headers = next(rows_iter)
     lot_idx = headers.index("LOT_NUMBER")
     wb_idx = headers.index("WAYBILL")
-    pairs = []
+    sub_idx = headers.index("SUBINVENTORY")
+    triples = []
     for r in rows_iter:
         lot = r[lot_idx]
         if lot:
-            pairs.append((lot, r[wb_idx]))
-    return pairs
+            triples.append((lot, r[wb_idx], r[sub_idx]))
+    return triples
 
 
 def is_blank(value):
@@ -197,16 +201,29 @@ def check_subinventory_sort_or_intransit(rows):
     return [r for r in rows if r.get("subInventory") in SORT_OR_INTRANSIT_SUBINVENTORY]
 
 
-def find_waybills(lot_id, master_pairs):
+def _join_unique(values):
+    out = []
+    for v in values:
+        if v not in (None, "") and v not in out:
+            out.append(str(v))
+    return ", ".join(out) if out else None
+
+
+def find_master_lookup(lot_id, master_details):
+    """Returns (waybill, subInventory) looked up from the master workbook by
+    anodeLotID, matching via substring containment on the trailing-letter-
+    stripped lot id. Multiple matches are comma-joined per field."""
     if not lot_id:
-        return None
+        return None, None
     norm = strip_trailing_letter(lot_id)
-    waybills = []
-    for m_lot, m_waybill in master_pairs:
-        if isinstance(m_lot, str) and (norm in m_lot or m_lot in norm):
-            if m_waybill not in (None, "") and m_waybill not in waybills:
-                waybills.append(str(m_waybill))
-    return ", ".join(waybills) if waybills else None
+    matches = [
+        (m_waybill, m_sub)
+        for m_lot, m_waybill, m_sub in master_details
+        if isinstance(m_lot, str) and (norm in m_lot or m_lot in norm)
+    ]
+    waybill = _join_unique(m[0] for m in matches)
+    subinventory = _join_unique(m[1] for m in matches)
+    return waybill, subinventory
 
 
 def daily_summary(rows, date_field="planDate"):
@@ -247,13 +264,13 @@ def write_duplicate_lot_sheet(wb, title, dup_map):
     return ws
 
 
-def write_sort_or_intransit_sheet(wb, title, rows, master_pairs):
-    columns = EXPORT_COLUMNS + ["waybill"]
+def write_sort_or_intransit_sheet(wb, title, rows, master_details):
+    columns = EXPORT_COLUMNS + ["waybill", "master_subInventory"]
     ws = wb.create_sheet(title)
     ws.append(columns)
     for r in rows:
-        waybill = find_waybills(r.get("anodeLotID"), master_pairs)
-        ws.append([r.get(c) for c in EXPORT_COLUMNS] + [waybill])
+        waybill, master_sub = find_master_lookup(r.get("anodeLotID"), master_details)
+        ws.append([r.get(c) for c in EXPORT_COLUMNS] + [waybill, master_sub])
     for i, col in enumerate(columns, start=1):
         ws.column_dimensions[get_column_letter(i)].width = max(12, len(col) + 2)
     return ws
@@ -274,7 +291,7 @@ def write_daily_summary_sheets(wb, prefix, summary):
             detail.append([s["date"]] + [r.get(c) for c in EXPORT_COLUMNS])
 
 
-def build_report(current_rows, master_lots, master_pairs, output_path):
+def build_report(current_rows, master_lots, master_details, output_path):
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
 
@@ -300,7 +317,7 @@ def build_report(current_rows, master_lots, master_pairs, output_path):
     write_sort_or_intransit_sheet(
         wb, "9_SortOrIntransit",
         check_subinventory_sort_or_intransit(current_rows),
-        master_pairs,
+        master_details,
     )
 
     wb.save(output_path)
@@ -317,9 +334,9 @@ def main():
 
     current_rows = load_rows(args.current, args.sheet)
     master_lots = load_master_planned_lots(args.master, args.master_sheet)
-    master_pairs = load_master_lot_waybill_pairs(args.master, args.master_sheet)
+    master_details = load_master_lot_details(args.master, args.master_sheet)
 
-    build_report(current_rows, master_lots, master_pairs, args.output)
+    build_report(current_rows, master_lots, master_details, args.output)
 
     print(f"Loaded {len(current_rows)} rows from '{args.current}' ({args.sheet}).")
     print(f"Loaded {len(master_lots)} non-blank-PlanDate LOT_NUMBERs from '{args.master}' ({args.master_sheet}).")
