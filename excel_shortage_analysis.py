@@ -16,6 +16,9 @@ Build a shortage report from three planning Excel files:
    - "Overall TPT" has an ItemName column and an adjusted_tpt column;
      Actual TPT is the average adjusted_tpt over every row whose
      ItemName matches a partNumber.
+   - "KEMET_GOP_ATO_ANALYSIS_DAILY" also has a NEED_BY_DATE column;
+     Need By Date is the earliest NEED_BY_DATE over every row whose
+     PARENT_ITEM matches a partNumber.
 3. PlanningResult.xlsx - Sheet1 has one row per planned lot (partNumber,
    planDate, quantity). matchedQty is the sum of quantity over every row
    whose partNumber matches - the total already covered by planning.
@@ -157,6 +160,21 @@ def get_actual_tpt(loading_path, sheet_name="Overall TPT"):
     return {item: sums[item] / count for item, count in counts.items()}
 
 
+def get_need_by_dates(loading_path, sheet_name="KEMET_GOP_ATO_ANALYSIS_DAILY"):
+    wb = openpyxl.load_workbook(loading_path, read_only=True, data_only=True)
+    ws = wb[sheet_name]
+    header_row, header = _find_header_row(ws, "PARENT_ITEM", max_scan_rows=15)
+    parent_col = header.index("PARENT_ITEM")
+    need_col = header.index("NEED_BY_DATE")
+
+    need_by = {}
+    for row in ws.iter_rows(min_row=header_row + 1, values_only=True):
+        pn, date = row[parent_col], row[need_col]
+        if pn and date and (pn not in need_by or date < need_by[pn]):
+            need_by[pn] = date
+    return need_by
+
+
 def build_report(warning_path, loading_path, planning_result_path, weeks=None):
     part_numbers = get_target_part_numbers(warning_path)
     required, week_label = get_required_quantities(loading_path, weeks=weeks)
@@ -164,18 +182,22 @@ def build_report(warning_path, loading_path, planning_result_path, weeks=None):
     categories = get_categories(loading_path)
     anodes = get_anodes(loading_path)
     actual_tpt = get_actual_tpt(loading_path)
+    need_by_dates = get_need_by_dates(loading_path)
 
     rows = []
     for pn in part_numbers:
         req = required.get(pn, 0)
         mat = matched.get(pn, 0)
-        rows.append((categories.get(pn, ""), anodes.get(pn, ""), pn, req, mat, mat - req, actual_tpt.get(pn)))
+        rows.append((
+            categories.get(pn, ""), anodes.get(pn, ""), pn, req, mat, mat - req,
+            actual_tpt.get(pn), need_by_dates.get(pn),
+        ))
     return rows, week_label
 
 
 def save(rows, week_label, output_path):
     wb = openpyxl.Workbook()
-    header = ["category", "anode", "partNumber", week_label, "matchedQty", "gap", "Actual TPT"]
+    header = ["category", "anode", "partNumber", week_label, "matchedQty", "gap", "Actual TPT", "Need By Date"]
 
     ws_all = wb.active
     ws_all.title = "AllPartNumbers"
@@ -190,12 +212,13 @@ def save(rows, week_label, output_path):
             ws_short.append(list(row))
 
     for ws in (ws_all, ws_short):
-        for col, width in zip("ABCDEFG", (14, 20, 28, 14, 14, 16, 12)):
+        for col, width in zip("ABCDEFGH", (14, 20, 28, 14, 14, 16, 12, 14)):
             ws.column_dimensions[col].width = width
         for row in range(2, ws.max_row + 1):
             for col in "DEF":
                 ws[f"{col}{row}"].number_format = "#,##0;(#,##0)"
             ws[f"G{row}"].number_format = "0.00"
+            ws[f"H{row}"].number_format = "yyyy-mm-dd"
 
     wb.save(output_path)
 
